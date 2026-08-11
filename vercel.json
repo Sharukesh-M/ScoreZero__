@@ -1,0 +1,10 @@
+{
+  "buildCommand": "cd \"frontend copy\" && npm install && npm run build",
+  "outputDirectory": "frontend copy/dist",
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
