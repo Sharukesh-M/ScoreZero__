@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Send, Bot, User, Loader2, RotateCcw, Copy, Check, TrendingDown, Wallet, AlertTriangle, ShieldCheck, Zap, MessageSquare } from 'lucide-react';
-import nodeApiClient from '../../api/nodeApiClient';
+import { Sparkles, Send, Bot, User, Loader2, RotateCcw, Copy, Check, TrendingDown, Wallet, AlertTriangle, ShieldCheck, MessageSquare } from 'lucide-react';
+import nodeApiClient, { type ScoreResult } from '../../api/nodeApiClient';
 
 interface Message {
   id: string;
@@ -141,7 +141,7 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
       if (uploadId) {
         try {
           const res = await nodeApiClient.statements.chat(uploadId, q, scoreContext);
-          aiText = res.answer || res.reply || '';
+          aiText = res.answer || (res as any).reply || '';
         } catch {
           // Fall through to general chat API
         }
