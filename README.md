@@ -250,7 +250,10 @@ GET /health
 
 | Contributor | Role |
 |-------------|------|
-| **Sharukesh M** | Full-Stack Development, AI Integration, System Architecture |
+| **Nidish Aadithya I.S.** | Authentication & Onboarding |
+| **Keerthivasan L** | UI/UX Architect |
+| **Karthikeyan V** | Scoring Engine & AI |
+| **Sharukesh M** | Infrastructure & Parsing |
 
 **Built with open source:**  
 React · Vite · Supabase · Framer Motion · Lenis · Lucide React · Groq · pdf-parse · Express.js · Zod
