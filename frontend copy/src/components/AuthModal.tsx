@@ -437,20 +437,15 @@ export function AuthModal({
         {/* modal-right */}
         <div className="modal-right hidden md:block flex-1 relative overflow-hidden bg-slate-900">
           <img
-            src="https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=1000&q=80"
+            src="https://images.unsplash.com/photo-1639762681485-074b7f938ba0?auto=format&fit=crop&w=1000&q=80"
             alt="ScoreZero Financial Analytics"
             className="w-full h-full object-cover opacity-85 hover:scale-105 transition-transform duration-700"
           />
           <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/40 to-transparent flex flex-col justify-end p-8 space-y-2">
-            <span className="px-3 py-1 rounded-full bg-[#00D2FF]/20 border border-[#00D2FF]/40 text-[#00D2FF] text-[10px] font-mono font-bold w-fit">
-              ScoreZero Underwriting Engine
-            </span>
             <h3 className="text-xl font-bold text-white leading-tight">
               Behavioral Credit Scoring from Bank Statements
             </h3>
-            <p className="text-xs text-slate-300 leading-relaxed font-medium">
-              Powered by Flask, SQLite/SQLAlchemy, and AI recommendation cascade (Ollama/Gemini).
-            </p>
+
           </div>
         </div>
 

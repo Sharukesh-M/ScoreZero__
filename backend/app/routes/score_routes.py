@@ -5,7 +5,7 @@ from app.config import Config
 from app.middleware.auth_middleware import require_auth
 from app.services import supabase_service
 from app.services.scoring_engine import calculate_metrics
-from app.services.groq_service import generate_recommendations
+from app.services.groq_service import generate_recommendations, generate_intelligent_statement_chat_response
 
 logger = logging.getLogger(__name__)
 score_bp = Blueprint('scores', __name__)
@@ -217,46 +217,27 @@ def generate_report(score_id=None, upload_id=None):
 @require_auth
 def handle_chat_query():
     data = request.get_json() or {}
-    user_msg = data.get('message', '').strip()
+    user_msg = (data.get('message') or data.get('question') or '').strip()
     score_ctx = data.get('context')
 
     if not user_msg:
         return jsonify({"error": "Message is required.", "code": "VALIDATION_ERROR"}), 400
 
-    ctx_prompt = ""
-    if score_ctx and isinstance(score_ctx, dict):
-        ctx_prompt = (
-            f"User Profile context: Score {score_ctx.get('score_value', 'N/A')}/100 ({score_ctx.get('score_band', 'N/A')}). "
-            f"Income Regularity: {score_ctx.get('metrics', {}).get('income_regularity', 'N/A')}, "
-            f"Savings Ratio: {score_ctx.get('metrics', {}).get('savings_ratio', 'N/A')}, "
-            f"Bounce Frequency: {score_ctx.get('metrics', {}).get('bounce_frequency', 'N/A')}. "
-        )
+    # 1. Fetch user's score history
+    history_scores, _ = supabase_service.get_score_history(request.user_id, limit=50)
 
-    prompt = (
-        f"You are ScoreZero's AI Financial Advisor. {ctx_prompt}\n"
-        f"Answer the user's question accurately, concisely (2-3 sentences max), and encourage loan-readiness habits (consistent income routing, zero bounces, buffer balance).\n"
-        f"User question: {user_msg}"
+    # 2. Derive target score
+    target_score = score_ctx if (score_ctx and isinstance(score_ctx, dict)) else (history_scores[0] if history_scores else None)
+    transactions = (target_score.get("extracted_transactions") or []) if target_score else []
+
+    reply = generate_intelligent_statement_chat_response(
+        question=user_msg,
+        score_data=target_score,
+        history_scores=history_scores,
+        transactions=transactions
     )
 
-    try:
-        from groq import Groq
-        if Config.GROQ_API_KEY:
-            client = Groq(api_key=Config.GROQ_API_KEY)
-            resp = client.chat.completions.create(
-                model=Config.GROQ_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=250,
-                temperature=0.4
-            )
-            reply = resp.choices[0].message.content.strip()
-            return jsonify({"reply": reply}), 200
-    except Exception as e:
-        logger.warning(f"[chat] Groq call failed ({e}), trying fallback")
-
-    # Fallback response
-    return jsonify({
-        "reply": "To make your statement loan-ready, route all gig income into one primary bank account, keep a minimum buffer balance, and avoid bounced debits."
-    }), 200
+    return jsonify({"reply": reply, "answer": reply}), 200
 
 # ─── Danger Zone: Delete Account ─────────────────────────────────────────────
 @score_bp.route('/account/delete', methods=['DELETE'])

@@ -1,4 +1,5 @@
 import { Sparkles, LogIn, LogOut, User as UserIcon, LayoutDashboard, UserPlus } from 'lucide-react';
+import { useLenis } from 'lenis/react';
 import type { User } from '../api/client';
 
 interface NavbarProps {
@@ -20,6 +21,18 @@ export function Navbar({
   currentView: _currentView = 'landing',
   onSwitchView,
 }: NavbarProps) {
+  const lenis = useLenis();
+
+  const scrollTo = (id: string) => (e: React.MouseEvent) => {
+    e.preventDefault();
+    const target = document.getElementById(id);
+    if (lenis && target) {
+      lenis.scrollTo(target, { offset: -80, duration: 1.4 });
+    } else if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
   return (
     <header className="fixed top-0 left-0 right-0 z-50 bg-[#08101C]/80 backdrop-blur-md border-b border-slate-800/40 transition-all duration-300">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 sm:h-20 flex items-center justify-between">
@@ -40,9 +53,27 @@ export function Navbar({
 
         {/* Navigation Links */}
         <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-slate-300">
-          <a href="#work" className="hover:text-[#00D2FF] transition-colors">How it Works</a>
-          <a href="#philosophy" className="hover:text-[#00D2FF] transition-colors">Scoring Engine</a>
-          <a href="#contact" className="hover:text-[#00D2FF] transition-colors">Contact</a>
+          <a
+            href="#work"
+            onClick={scrollTo('work')}
+            className="hover:text-[#00D2FF] transition-colors cursor-pointer"
+          >
+            How it Works
+          </a>
+          <a
+            href="#philosophy"
+            onClick={scrollTo('philosophy')}
+            className="hover:text-[#00D2FF] transition-colors cursor-pointer"
+          >
+            Scoring Engine
+          </a>
+          <a
+            href="#contact"
+            onClick={scrollTo('contact')}
+            className="hover:text-[#00D2FF] transition-colors cursor-pointer"
+          >
+            Contact
+          </a>
         </nav>
 
         {/* Auth Controls */}

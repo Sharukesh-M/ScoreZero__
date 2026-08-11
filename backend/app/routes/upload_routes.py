@@ -7,7 +7,7 @@ from app.middleware.auth_middleware import require_auth
 from app.services import supabase_service
 from app.services.pdf_parser import parse_pdf_buffer, check_minimum_thresholds, check_statement_type, reconcile_header_totals
 from app.services.scoring_engine import calculate_metrics
-from app.services.groq_service import generate_recommendations
+from app.services.groq_service import generate_recommendations, generate_intelligent_statement_chat_response
 
 logger = logging.getLogger(__name__)
 upload_bp = Blueprint('uploads', __name__)
@@ -235,50 +235,32 @@ def delete_statement_endpoint(identifier):
 def chat_with_statement(upload_id):
     data = request.get_json() or {}
     question = data.get("question", "").strip()
+    ctx_from_body = data.get("context")
 
     if not question:
         return jsonify({"error": "Question is required."}), 400
 
+    # 1. Fetch user's score history
+    history_scores, _ = supabase_service.get_score_history(request.user_id, limit=50)
+
+    # 2. Find target score or use context passed from request body
+    target_score = ctx_from_body if (ctx_from_body and isinstance(ctx_from_body, dict)) else None
+    if not target_score and history_scores:
+        if upload_id and upload_id != 'undefined':
+            target_score = next((s for s in history_scores if s.get("upload_id") == upload_id or s.get("score_id") == upload_id), None)
+        if not target_score:
+            target_score = history_scores[0]
+
     cached = parsed_results_cache.get(upload_id) or {}
     transactions = cached.get("transactions") or []
+    if not transactions and target_score:
+        transactions = target_score.get("extracted_transactions") or []
 
-    if not transactions and upload_id:
-        upload = supabase_service.get_upload(upload_id, request.user_id)
-        if upload:
-            scores, _ = supabase_service.get_score_history(request.user_id, limit=50)
-            target_score = next((s for s in scores if s.get("upload_id") == upload_id), None)
-            if target_score:
-                transactions = target_score.get("extracted_transactions") or []
+    answer = generate_intelligent_statement_chat_response(
+        question=question,
+        score_data=target_score,
+        history_scores=history_scores,
+        transactions=transactions
+    )
 
-    tx_summary = []
-    for t in transactions[:150]:
-        tx_summary.append(f"{t.get('date', 'N/A')} | {t.get('transaction_type', 'Tx')}: ₹{t.get('amount', 0):,.2f} | Desc: {t.get('description', 'N/A')} | Cat: {t.get('category', 'N/A')}")
-
-    context_str = "\n".join(tx_summary) if tx_summary else "No detailed transaction table available for this statement."
-
-    system_prompt = f"""You are ScoreZero AI Statement Assistant. Answer the user's question about their uploaded PDF statement accurately based on the transaction data provided below.
-If the answer is found in the data, provide specific numbers (₹ amounts, dates, categories). Keep answers concise and direct.
-
-Statement Transactions Context:
-{context_str}
-"""
-
-    answer = "I couldn't analyze the statement context right now."
-    if Config.GROQ_API_KEY:
-        try:
-            client = Groq(api_key=Config.GROQ_API_KEY)
-            resp = client.chat.completions.create(
-                model=Config.GROQ_MODEL or "llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": question}
-                ],
-                max_tokens=400,
-                temperature=0.3
-            )
-            answer = resp.choices[0].message.content.strip()
-        except Exception as e:
-            logger.warning(f"[chat_endpoint] Groq API call failed: {e}")
-            answer = f"Based on your statement data: total transactions = {len(transactions)}. Please ask about specific amounts, vendors, or dates."
-
-    return jsonify({"answer": answer, "question": question, "upload_id": upload_id}), 200
+    return jsonify({"answer": answer, "reply": answer, "question": question, "upload_id": upload_id}), 200

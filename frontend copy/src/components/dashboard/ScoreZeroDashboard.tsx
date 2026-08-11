@@ -407,9 +407,10 @@ type UploadState = 'idle' | 'uploading' | 'processing' | 'completed' | 'failed';
 interface UploadZoneProps {
   onComplete: (score: ScoreResult) => void;
   onToast: (msg: string, type: 'success' | 'error' | 'info') => void;
+  uploadTrigger?: number;
 }
 
-const UploadZone = ({ onComplete, onToast }: UploadZoneProps) => {
+const UploadZone = ({ onComplete, onToast, uploadTrigger }: UploadZoneProps) => {
   const [file, setFile] = useState<File | null>(null);
   const [userQuestion, setUserQuestion] = useState('');
   const [dragOver, setDragOver] = useState(false);
@@ -423,6 +424,14 @@ const UploadZone = ({ onComplete, onToast }: UploadZoneProps) => {
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const uploadIdRef = useRef<string | null>(null);
+
+  const prevUploadTriggerRef = useRef(uploadTrigger ?? 0);
+  useEffect(() => {
+    if (uploadTrigger && uploadTrigger > prevUploadTriggerRef.current) {
+      prevUploadTriggerRef.current = uploadTrigger;
+      fileRef.current?.click();
+    }
+  }, [uploadTrigger]);
 
   const validate = (f: File): string | null => {
     if (!f.name.toLowerCase().endsWith('.pdf')) return 'Only PDF files are accepted.';
@@ -971,9 +980,10 @@ interface HistorySectionProps {
   onLoad: boolean;
   onSelectHistory?: (uploadId: string) => void;
   onDeleteHistory?: (uploadId: string) => void;
+  onGoToUpload?: () => void;
 }
 
-const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory }: HistorySectionProps) => {
+const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory, onGoToUpload }: HistorySectionProps) => {
   const [history, setHistory] = useState<HistoryScore[]>([]);
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
@@ -1000,9 +1010,21 @@ const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory }: HistorySec
     const idToDelete = item.upload_id || item.score_id;
     try {
       await nodeApiClient.statements.delete(idToDelete);
-      setHistory((prev) => prev.filter((h) => h.score_id !== item.score_id));
-      setTotal((t) => Math.max(0, t - 1));
+      const newTotal = Math.max(0, total - 1);
+      setTotal(newTotal);
+
       if (onDeleteHistory) onDeleteHistory(idToDelete);
+
+      if (newTotal === 0) {
+        setHistory([]);
+        setPage(0);
+      } else {
+        const maxPage = Math.ceil(newTotal / PER_PAGE) - 1;
+        const targetPage = Math.min(page, Math.max(0, maxPage));
+        setPage(targetPage);
+        // Automatically reload targetPage so the next record shifts into view!
+        load(targetPage);
+      }
     } catch {
       // ignore
     }
@@ -1034,9 +1056,33 @@ const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory }: HistorySec
           <div style={{ width: 32, height: 32, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.1)', borderTop: '3px solid #4A90E2', animation: 'spin 1s linear infinite' }} />
         </div>
       ) : history.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-secondary, #7A8FA3)' }}>
-          <BarChart2 size={40} color="var(--text-secondary, #7A8FA3)" style={{ marginBottom: 12 }} />
-          <p style={{ fontSize: 14 }}>No history yet. Upload a statement to get your first score.</p>
+        <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-secondary, #7A8FA3)' }}>
+          <BarChart2 size={44} color="#4A90E2" style={{ marginBottom: 16 }} />
+          <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary, #2C3E50)', margin: '0 0 8px 0' }}>
+            No History Records Found
+          </p>
+          <p style={{ fontSize: 13, color: 'var(--text-secondary, #7A8FA3)', margin: '0 0 20px 0' }}>
+            You have no saved statement analysis records. Upload a new bank statement PDF to generate your credit score.
+          </p>
+          {onGoToUpload && (
+            <button
+              onClick={onGoToUpload}
+              style={{
+                padding: '10px 22px',
+                borderRadius: '12px',
+                background: 'linear-gradient(135deg, #4A90E2, #357ABD)',
+                color: '#FFFFFF',
+                fontWeight: 700,
+                fontSize: '13px',
+                border: 'none',
+                cursor: 'pointer',
+                boxShadow: '0 4px 14px rgba(74, 144, 226, 0.35)',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              Upload New Statement PDF
+            </button>
+          )}
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -1065,7 +1111,7 @@ const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory }: HistorySec
                 </div>
                 <div style={{ flex: 1 }}>
                   <p style={{ fontSize: 12, color: 'var(--text-secondary, #7A8FA3)', marginBottom: 2 }}>{formatDate(item.calculated_at)}</p>
-                  <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary, #2C3E50)', margin: 0 }}>Score #{item.score_id.slice(0, 8)}</p>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary, #2C3E50)', margin: 0 }}>Statement Evaluation</p>
                 </div>
                 <div style={{ textAlign: 'right' }}>
                   <p style={{ fontSize: 22, fontWeight: 800, color, margin: 0 }}>
@@ -1221,7 +1267,7 @@ const ScoreLineChart = ({ history }: { history: HistoryScore[] }) => {
                 {pt.score_value}
               </text>
               <text x={x} y={height - 10} fill="var(--text-secondary, #7A8FA3)" fontSize="10" fontWeight="600" textAnchor="middle">
-                #{pt.score_id.slice(0, 6)}
+                {pt.calculated_at ? new Date(pt.calculated_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) : `Eval ${idx + 1}`}
               </text>
             </g>
           );
@@ -1231,46 +1277,89 @@ const ScoreLineChart = ({ history }: { history: HistoryScore[] }) => {
   );
 };
 
-const AnalyticsView = ({ score }: { score: ScoreResult | null }) => {
-  // Initialize state immediately from score prop for INSTANT rendering without delay!
-  const [historyScores, setHistoryScores] = useState<HistoryScore[]>(() => {
-    if (score) {
-      return [{
-        score_id: score.score_id,
-        upload_id: score.upload_id,
-        score_value: score.score_value,
-        score_band: score.score_band,
-        calculated_at: new Date().toISOString(),
-      }];
-    }
-    return [];
-  });
+const AnalyticsView = ({ score, onGoToUpload }: { score: ScoreResult | null; onGoToUpload?: () => void }) => {
+  const [historyScores, setHistoryScores] = useState<HistoryScore[]>([]);
+  const [loading, setLoading] = useState(true);
 
+  // Re-fetch history whenever a new PDF score comes in (score.score_id changes)
   useEffect(() => {
+    setLoading(true);
     nodeApiClient.scores.history(50)
       .then((res) => {
-        if (res.scores && res.scores.length > 0) {
+        if (res && res.scores) {
           setHistoryScores(res.scores);
         }
       })
-      .catch(() => {});
-  }, []);
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [score?.score_id]);
 
+  const totalHistoryCount = historyScores.length;
   const currentTxs = score?.extracted_transactions || [];
+  const hasData = Boolean(score || totalHistoryCount > 0);
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '60px 0' }}>
+        <div style={{ width: 36, height: 36, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.1)', borderTop: '3px solid #4A90E2', animation: 'spin 1s linear infinite' }} />
+      </div>
+    );
+  }
+
+  if (!hasData) {
+    return (
+      <div style={{
+        background: 'var(--bg-secondary, #F0F4F8)',
+        borderRadius: '24px',
+        boxShadow: 'var(--shadow-card)',
+        padding: '48px 32px',
+        textAlign: 'center',
+        border: '1px solid rgba(255,255,255,0.08)',
+        animation: 'fadeIn 0.4s ease',
+      }}>
+        <BarChart2 size={48} color="#4A90E2" style={{ marginBottom: 16 }} />
+        <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary, #2C3E50)', margin: '0 0 10px 0' }}>
+          No Analytics Data Available
+        </h2>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary, #7A8FA3)', maxWidth: 480, margin: '0 auto 24px', lineHeight: 1.6 }}>
+          You have no uploaded bank statements or history records. Upload a bank statement PDF to view your cash flow breakdown, category spending distribution, and credit score trajectory over time.
+        </p>
+        {onGoToUpload && (
+          <button
+            onClick={onGoToUpload}
+            style={{
+              padding: '12px 24px',
+              borderRadius: '14px',
+              background: 'linear-gradient(135deg, #4A90E2, #357ABD)',
+              color: '#FFFFFF',
+              fontWeight: 700,
+              fontSize: '14px',
+              border: 'none',
+              cursor: 'pointer',
+              boxShadow: '0 4px 16px rgba(74, 144, 226, 0.4)',
+              transition: 'all 0.2s ease',
+            }}
+          >
+            Upload New Statement PDF
+          </button>
+        )}
+      </div>
+    );
+  }
+
   const essentialCount = currentTxs.filter((t) => t.category === 'essential_spend').length;
   const discretionaryCount = currentTxs.filter((t) => t.category === 'discretionary_spend').length;
   const incomeCount = currentTxs.filter((t) => t.category === 'income' || t.transaction_type === 'Credit').length;
   const transferCount = currentTxs.filter((t) => t.category === 'internal_transfer').length;
   const totalCount = currentTxs.length || 1;
 
-  const totalHistoryCount = historyScores.length;
   const avgHistoryScore = totalHistoryCount > 0
     ? Math.round(historyScores.reduce((acc, h) => acc + h.score_value, 0) / totalHistoryCount)
     : (score?.score_value || 0);
 
   const displayScore = score?.score_value || avgHistoryScore;
   const metrics = score?.metrics || {
-    income_regularity: 80,
+    income_regularity: displayScore,
     savings_ratio: displayScore >= 70 ? 75 : 45,
     spending_discipline: displayScore >= 60 ? 70 : 40,
     bounce_frequency: 100,
@@ -1285,10 +1374,27 @@ const AnalyticsView = ({ score }: { score: ScoreResult | null }) => {
     { label: 'Balance Trend', val: metrics.balance_trend !== null ? metrics.balance_trend : 50, color: '#a855f7' },
   ];
 
+  // Detect improvement from previous statement
+  const sortedHistory = [...historyScores].sort(
+    (a, b) => new Date(b.calculated_at).getTime() - new Date(a.calculated_at).getTime()
+  );
+  const previousScore = sortedHistory.length > 1 ? sortedHistory[1] : null;
+  const scoreDelta = score && previousScore
+    ? score.score_value - previousScore.score_value
+    : null;
+
+  const improvementNote = scoreDelta !== null
+    ? scoreDelta > 0
+      ? `📈 Your score improved by +${scoreDelta} points compared to your previous statement (${previousScore!.score_value}/100). Your remedies are working — keep it up!`
+      : scoreDelta < 0
+      ? `📉 Your score declined by ${Math.abs(scoreDelta)} points vs your previous statement (${previousScore!.score_value}/100). Review the action plan below to reverse this trend.`
+      : `➡️ Your score is unchanged from your previous statement (${previousScore!.score_value}/100). Consistent improvement requires sustained effort over 2–3 months.`
+    : null;
+
   // Overall Historical Synthesis Advisory Text
   const overallAdvisory = score?.explanation || (
     totalHistoryCount > 0
-      ? `Based on your overall historical dataset across ${totalHistoryCount} analyzed statements (average score: ${avgHistoryScore}/100), your financial trajectory indicates consistent deposit regularity. Maintain steady salary credits and limit non-essential transfers to build 3+ months of high-confidence loan readiness.`
+      ? `Based on ${totalHistoryCount} analyzed statement${totalHistoryCount > 1 ? 's' : ''} (overall avg: ${avgHistoryScore}/100), your financial trajectory shows ${avgHistoryScore >= 70 ? 'strong' : avgHistoryScore >= 50 ? 'moderate' : 'developing'} creditworthiness. ${avgHistoryScore >= 70 ? 'Maintain steady salary credits and a positive savings buffer to secure optimal loan terms.' : 'Focus on reducing discretionary spend, clearing outstanding bounce fees, and building 3+ months of clean deposit history.'}`
       : 'Upload your bank or UPI statements to track score progress, transaction distribution, and financial health over time.'
   );
 
@@ -1411,6 +1517,21 @@ const AnalyticsView = ({ score }: { score: ScoreResult | null }) => {
         </div>
       )}
 
+      {/* ── Improvement / Regression Note ── */}
+      {improvementNote && (
+        <div style={{
+          background: scoreDelta! > 0 ? 'rgba(34,197,94,0.08)' : scoreDelta! < 0 ? 'rgba(239,68,68,0.08)' : 'rgba(74,144,226,0.08)',
+          borderRadius: '20px',
+          padding: '18px 24px',
+          border: `1px solid ${scoreDelta! > 0 ? 'rgba(34,197,94,0.3)' : scoreDelta! < 0 ? 'rgba(239,68,68,0.3)' : 'rgba(74,144,226,0.3)'}`,
+          fontSize: 14, lineHeight: 1.7,
+          color: 'var(--text-primary, #2C3E50)',
+          fontWeight: 600,
+        }}>
+          {improvementNote}
+        </div>
+      )}
+
       {/* ── Overall Suggestion Box (All Previous History Data Considered) ── */}
       <div style={{
         background: 'var(--bg-secondary, #F0F4F8)',
@@ -1421,7 +1542,7 @@ const AnalyticsView = ({ score }: { score: ScoreResult | null }) => {
         borderLeft: '5px solid #4A90E2',
       }}>
         <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary, #2C3E50)', margin: '0 0 12px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Sparkles size={18} color="#4A90E2" /> Overall AI Advisory Suggestion (Historical Multi-Statement Synthesis)
+          <Sparkles size={18} color="#4A90E2" /> AI Advisory — Historical Multi-Statement Synthesis ({totalHistoryCount} statement{totalHistoryCount !== 1 ? 's' : ''}, avg {avgHistoryScore}/100)
         </h3>
         <p style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--text-primary, #4A5568)', margin: 0 }}>
           {overallAdvisory}
@@ -1470,6 +1591,9 @@ interface ScoreZeroDashboardProps {
 export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps) {
   const { user, logout } = useAuth();
   const [currentScore, setCurrentScore] = useState<ScoreResult | null>(null);
+  // latestScore: auto-loaded from backend on mount so AI Advisory works even
+  // if the user hasn't uploaded a new PDF in the current session.
+  const [latestScore, setLatestScore] = useState<ScoreResult | null>(null);
   const [activeNavTab, setActiveNavTab] = useState<NavTab>('dashboard');
   const [suggestionsOnlyMode, setSuggestionsOnlyMode] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -1477,8 +1601,46 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
   const [toast, setToast] = useState<{ msg: string; type: 'success' | 'error' | 'info' } | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [uploadTrigger, setUploadTrigger] = useState(0);
+
+  // Welcome-back banner: shown once per component mount (i.e. every fresh login/navigation to dashboard)
+  const [showWelcomeBack, setShowWelcomeBack] = useState(false);
+  const welcomeShownRef = useRef(false);
+
+  // Clean up stale sessionStorage key from older version of this component
+  useEffect(() => { sessionStorage.removeItem('sz_welcome_shown'); }, []);
+
+  // Auto-load the most recent score from history so tabs (AI Advisory, Analytics) work without a fresh upload
+  useEffect(() => {
+    nodeApiClient.scores.latest()
+      .then((score) => {
+        if (score) {
+          setLatestScore(score);
+          // Show welcome-back banner once per mount — useRef prevents double-trigger in StrictMode
+          if (!welcomeShownRef.current) {
+            welcomeShownRef.current = true;
+            setShowWelcomeBack(true);
+            // Auto-dismiss after 6 seconds
+            const t = setTimeout(() => setShowWelcomeBack(false), 6000);
+            return () => clearTimeout(t);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // The "active" score to use across tabs: prefer a freshly-uploaded one, fall back to history
+  const activeScore = currentScore ?? latestScore;
 
   const showToast = (msg: string, type: 'success' | 'error' | 'info') => setToast({ msg, type });
+
+  const handleTriggerUpload = () => {
+    setActiveNavTab('dashboard');
+    setSuggestionsOnlyMode(false);
+    setCurrentScore(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setUploadTrigger((prev) => prev + 1);
+  };
 
   const handleScoreReady = (score: ScoreResult) => {
     setCurrentScore(score);
@@ -1569,6 +1731,7 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
         @keyframes slideUp { from { opacity:0; transform:translateY(16px); } to { opacity:1; transform:translateY(0); } }
         @keyframes spin { to { transform: rotate(360deg); } }
         @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
+        @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 
         .card-hover-effect {
           transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -1600,6 +1763,7 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
         <TopNavBar
           activeTab={activeNavTab}
           onTabChange={(tab) => setActiveNavTab(tab)}
+          onTriggerUpload={handleTriggerUpload}
           onOpenSettings={() => setShowSettingsModal(true)}
           onOpenPrivacy={() => setShowPrivacyModal(true)}
           onBackToLanding={onBackToLanding}
@@ -1609,27 +1773,187 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
         {activeNavTab === 'loan-readiness' ? (
           <LoanReadinessPage onGoToUpload={() => setActiveNavTab('dashboard')} />
         ) : activeNavTab === 'analytics' ? (
-          <main style={{ maxWidth: 1000, margin: '0 auto', padding: '40px 24px 80px' }}>
-            <AnalyticsView score={currentScore} />
+          <main style={{ maxWidth: 1000, margin: '0 auto', padding: '20px 16px 60px' }}>
+            <AnalyticsView score={activeScore} onGoToUpload={handleTriggerUpload} />
           </main>
         ) : activeNavTab === 'chat-new' ? (
-          <main style={{ maxWidth: 950, margin: '0 auto', padding: '40px 24px 80px' }}>
-            <GeminiStatementChat
-              uploadId={currentScore?.upload_id}
-              fileName={currentScore?.score_id ? `Statement #${currentScore.score_id.slice(0, 8)}` : undefined}
-            />
+          <main style={{ maxWidth: 950, margin: '0 auto', padding: '16px 12px 60px' }}>
+            {activeScore?.upload_id ? (
+              <GeminiStatementChat
+                uploadId={activeScore.upload_id}
+                fileName={`Bank Statement • Score: ${activeScore.score_value}/100 (${activeScore.score_band})`}
+                scoreContext={activeScore}
+              />
+            ) : (
+              <div style={{
+                background: 'var(--bg-secondary, #F0F4F8)',
+                borderRadius: '24px',
+                boxShadow: 'var(--shadow-card)',
+                padding: '60px 32px',
+                textAlign: 'center',
+                border: '1px solid rgba(255,255,255,0.08)',
+                animation: 'fadeIn 0.4s ease',
+              }}>
+                <Sparkles size={48} color="#4A90E2" style={{ marginBottom: 16, opacity: 0.7 }} />
+                <h2 style={{ fontSize: 20, fontWeight: 800, color: 'var(--text-primary, #2C3E50)', margin: '0 0 10px 0' }}>
+                  AI Advisory Needs Your Statement
+                </h2>
+                <p style={{ fontSize: 14, color: 'var(--text-secondary, #7A8FA3)', maxWidth: 460, margin: '0 auto 28px', lineHeight: 1.7 }}>
+                  Upload a bank statement PDF to unlock AI-powered advisory. The AI will analyze your score, spending patterns, and provide personalized recommendations based on your full history.
+                </p>
+                <button
+                  onClick={handleTriggerUpload}
+                  style={{
+                    padding: '12px 28px', borderRadius: '14px',
+                    background: 'linear-gradient(135deg, #4A90E2, #357ABD)',
+                    color: '#FFFFFF', fontWeight: 700, fontSize: '14px',
+                    border: 'none', cursor: 'pointer',
+                    boxShadow: '0 4px 16px rgba(74, 144, 226, 0.4)',
+                  }}
+                >
+                  Upload PDF to Start AI Advisory
+                </button>
+              </div>
+            )}
           </main>
         ) : activeNavTab === 'history' ? (
-          <main style={{ maxWidth: 1000, margin: '0 auto', padding: '40px 24px 80px' }}>
+          <main style={{ maxWidth: 1000, margin: '0 auto', padding: '20px 16px 60px' }}>
             <HistorySection
               onLoad={true}
               onSelectHistory={handleSelectHistoryScore}
-              onDeleteHistory={() => showToast('Statement score deleted from history.', 'success')}
+              onDeleteHistory={async (deletedId) => {
+                showToast('Statement score deleted from history.', 'success');
+                if (currentScore && (currentScore.upload_id === deletedId || currentScore.score_id === deletedId)) {
+                  setCurrentScore(null);
+                  setSuggestionsOnlyMode(false);
+                }
+                if (latestScore && (latestScore.upload_id === deletedId || latestScore.score_id === deletedId)) {
+                  setLatestScore(null);
+                }
+                // Sync with latest remaining score in backend
+                try {
+                  const updatedLatest = await nodeApiClient.scores.latest();
+                  setLatestScore(updatedLatest);
+                } catch {
+                  setLatestScore(null);
+                }
+              }}
+              onGoToUpload={handleTriggerUpload}
             />
           </main>
         ) : (
-          <main style={{ maxWidth: 1100, margin: '0 auto', padding: '40px 24px 80px' }}>
+          <main style={{ maxWidth: 1100, margin: '0 auto', padding: '20px 16px 60px' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+
+              {/* ── Welcome Back Banner (Returning Users Only) ── */}
+              {showWelcomeBack && (
+                <div
+                  id="welcome-back-banner"
+                  style={{
+                    position: 'relative',
+                    borderRadius: '20px',
+                    padding: '18px 24px',
+                    background: 'linear-gradient(135deg, rgba(74,144,226,0.14) 0%, rgba(34,197,94,0.10) 50%, rgba(168,85,247,0.10) 100%)',
+                    border: '1.5px solid rgba(74,144,226,0.35)',
+                    boxShadow: '0 4px 24px rgba(74,144,226,0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    animation: 'slideUp 0.5s cubic-bezier(0.34,1.56,0.64,1)',
+                    overflow: 'hidden',
+                  }}
+                >
+                  {/* Shimmer bar at top */}
+                  <div style={{
+                    position: 'absolute',
+                    top: 0, left: 0, right: 0,
+                    height: '3px',
+                    background: 'linear-gradient(90deg, #4A90E2, #22c55e, #a855f7, #4A90E2)',
+                    backgroundSize: '200% 100%',
+                    animation: 'shimmer 2.5s linear infinite',
+                    borderRadius: '20px 20px 0 0',
+                  }} />
+
+                  {/* Icon */}
+                  <div style={{
+                    width: 44,
+                    height: 44,
+                    borderRadius: '14px',
+                    background: 'linear-gradient(135deg, #4A90E2, #22c55e)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    boxShadow: '0 4px 12px rgba(74,144,226,0.35)',
+                  }}>
+                    <Sparkles size={22} color="#FFFFFF" />
+                  </div>
+
+                  {/* Text */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{
+                      fontSize: '16px',
+                      fontWeight: 800,
+                      color: 'var(--text-primary, #2C3E50)',
+                      margin: '0 0 3px 0',
+                      letterSpacing: '-0.2px',
+                    }}>
+                      Welcome back{user?.name ? `, ${user.name.split(' ')[0]}` : ''}! 👋
+                    </p>
+                    <p style={{
+                      fontSize: '13px',
+                      color: 'var(--text-secondary, #7A8FA3)',
+                      margin: 0,
+                      lineHeight: 1.5,
+                    }}>
+                      Your ScoreZero financial profile is ready.{latestScore ? ` Last score: ${latestScore.score_value}/100 (${latestScore.score_band}).` : ''} Keep building a stronger credit future.
+                    </p>
+                  </div>
+
+                  {/* Score badge (if available) */}
+                  {latestScore && (
+                    <div style={{
+                      flexShrink: 0,
+                      padding: '6px 14px',
+                      borderRadius: '999px',
+                      background: `${getBandColor(latestScore.score_band)}18`,
+                      border: `1.5px solid ${getBandColor(latestScore.score_band)}40`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', background: getBandColor(latestScore.score_band) }} />
+                      <span style={{ fontSize: '13px', fontWeight: 700, color: getBandColor(latestScore.score_band) }}>
+                        {latestScore.score_value}/100
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Dismiss button */}
+                  <button
+                    onClick={() => setShowWelcomeBack(false)}
+                    title="Dismiss welcome message"
+                    aria-label="Dismiss welcome banner"
+                    style={{
+                      flexShrink: 0,
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      color: 'var(--text-secondary, #7A8FA3)',
+                      padding: '4px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderRadius: '8px',
+                      transition: 'color 0.2s',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = 'var(--text-primary, #2C3E50)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = 'var(--text-secondary, #7A8FA3)')}
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+              )}
 
               {/* Suggestions-Only Mode when loaded from history */}
               {suggestionsOnlyMode && currentScore ? (
@@ -1657,7 +1981,7 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
                           AI Suggestions & Action Plan ({currentScore.score_value}/100 • {currentScore.score_band})
                         </p>
                         <p style={{ fontSize: 12, color: 'var(--text-secondary, #7A8FA3)', margin: 0 }}>
-                          Showing suggestions for selected history record #{currentScore.score_id.slice(0, 8)}
+                          Showing suggestions for selected statement ({currentScore.score_value}/100 • {currentScore.score_band})
                         </p>
                       </div>
                     </div>
@@ -1672,6 +1996,8 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
               ) : (
                 <>
                   {/* Score card or Glowing Upload Zone + Search Chat */}
+                  {/* Only show ScoreCard after a fresh upload in this session — latestScore is kept
+                      for AI Advisory / Analytics tabs but does NOT auto-fill the main dashboard card. */}
                   {currentScore ? (
                     <ScoreCard score={currentScore} onReset={() => setCurrentScore(null)} />
                   ) : (
@@ -1701,19 +2027,19 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
                         filter: 'blur(100px)', opacity: 0.3, pointerEvents: 'none',
                       }} />
 
-                      <UploadZone onComplete={handleScoreReady} onToast={showToast} />
+                      <UploadZone onComplete={handleScoreReady} onToast={showToast} uploadTrigger={uploadTrigger} />
                     </div>
                   )}
 
                   {/* Optional Standalone AI Question Card for this PDF (Visible ONLY if user specified a question) */}
-                  {currentScore && (
+                  {activeScore && (
                     <div style={{ animation: 'fadeIn 0.5s ease 0.15s both' }}>
-                      <DashboardQuestionCard score={currentScore} />
+                      <DashboardQuestionCard score={activeScore} />
                     </div>
                   )}
 
                   {/* Metrics grid */}
-                  {currentScore && (
+                  {activeScore && (
                     <div style={{ animation: 'fadeIn 0.5s ease 0.2s both' }}>
                       <p style={{ fontSize: 16, fontWeight: 700, color: 'var(--text-primary, #2C3E50)', marginBottom: 18 }}>Metric Breakdown</p>
                       <div style={{
@@ -1725,7 +2051,7 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
                           <MetricCard
                             key={key}
                             label={label}
-                            value={currentScore.metrics[key]}
+                            value={activeScore.metrics[key]}
                             Icon={Icon}
                             color={color}
                             description={desc}
@@ -1736,16 +2062,16 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
                   )}
 
                   {/* AI Explanation + Recommendations */}
-                  {currentScore && (
+                  {activeScore && (
                     <div style={{ animation: 'fadeIn 0.5s ease 0.35s both' }}>
-                      <RecommendationsCard score={currentScore} />
+                      <RecommendationsCard score={activeScore} />
                     </div>
                   )}
                 </>
               )}
 
               {/* Actions */}
-              {currentScore && (
+              {activeScore && (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, animation: 'fadeIn 0.5s ease 0.5s both' }}>
                   <NmButton onClick={handleDownloadReport} disabled={isDownloading}>
                     <Download size={15} />
@@ -1770,8 +2096,16 @@ export function ScoreZeroDashboard({ onBackToLanding }: ScoreZeroDashboardProps)
                       <NmButton size="sm" variant="danger" onClick={async () => {
                         try {
                           if (currentScore?.upload_id) await nodeApiClient.statements.delete(currentScore.upload_id);
-                          setCurrentScore(null); setShowDeleteConfirm(false);
+                          setCurrentScore(null);
+                          setSuggestionsOnlyMode(false);
+                          setShowDeleteConfirm(false);
                           showToast('Your score data has been deleted.', 'info');
+                          try {
+                            const updatedLatest = await nodeApiClient.scores.latest();
+                            setLatestScore(updatedLatest);
+                          } catch {
+                            setLatestScore(null);
+                          }
                         } catch { showToast('Delete failed.', 'error'); }
                       }}>
                         <Check size={13} /> Confirm

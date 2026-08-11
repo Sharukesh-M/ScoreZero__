@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { ReactLenis } from 'lenis/react';
 
 import { Navbar } from './components/Navbar';
@@ -7,6 +7,8 @@ import { ScrollHero } from './components/ScrollHero';
 import { ScoreEngineContainerScroll } from './components/ScoreEngineContainerScroll';
 import ScoreZeroDashboard from './components/dashboard/ScoreZeroDashboard';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { AppSkeleton } from './components/AppSkeleton';
+import { LandingLoader } from './components/LandingLoader';
 
 // ScoreZero AI Engine Site Components
 import OverlayMenu from './components/OverlayMenu';
@@ -15,27 +17,32 @@ import EngineArchitecture from './components/EngineArchitecture';
 import ContactSection from './components/ContactSection';
 import AboutFooter from './components/AboutFooter';
 
-import { motion, useScroll, useTransform } from 'framer-motion';
+
 
 function AppContent() {
-  const { user, logout } = useAuth();
+  const { user, logout, isLoading } = useAuth();
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [inPortfolio, setInPortfolio] = useState(false);
-  const [currentView, setCurrentView] = useState<'landing' | 'dashboard'>(() => {
-    return localStorage.getItem('scorezero_token') ? 'dashboard' : 'landing';
-  });
+
+
+
+  // Optimistic init: if a token exists, assume dashboard until auth proves otherwise.
+  // This prevents the single-frame flash of landing page on reload when already logged in.
+  const [currentView, setCurrentView] = useState<'landing' | 'dashboard'>(
+    () => localStorage.getItem('scorezero_token') ? 'dashboard' : 'landing'
+  );
 
   useEffect(() => {
     document.documentElement.classList.add('dark');
   }, []);
 
-  // Automatically navigate to dashboard when user logs in or is authenticated
+  // Once auth resolves, set the view based on actual user state
   useEffect(() => {
-    if (user) {
-      setCurrentView('dashboard');
+    if (!isLoading) {
+      setCurrentView(user ? 'dashboard' : 'landing');
     }
-  }, [user]);
+  }, [isLoading, user]);
 
   const handleOpenLogin = () => {
     setAuthMode('login');
@@ -52,8 +59,8 @@ function AppContent() {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const handleLogout = () => {
-    logout();
+  const handleLogout = async () => {
+    await logout();
     setCurrentView('landing');
   };
 
@@ -70,13 +77,21 @@ function AppContent() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [currentView]);
 
-  const footerContainerRef = useRef<HTMLDivElement>(null);
 
-  const { scrollYProgress: footerScrollProgress } = useScroll({
-    target: footerContainerRef,
-    offset: ['start end', 'end end'],
-  });
-  const footerY = useTransform(footerScrollProgress, [0, 1], ['-50%', '0%']);
+
+  // Hard-timeout safety: force exit skeleton after 6s in case backend never responds.
+  // The new AuthContext should resolve in <1s via Supabase, so this is just a safety net.
+  const [forceReady, setForceReady] = useState(false);
+  useEffect(() => {
+    const t = setTimeout(() => setForceReady(true), 6000);
+    return () => clearTimeout(t);
+  }, []);
+
+  // Show skeleton while auth state is being resolved
+  if (isLoading && !forceReady) {
+    return <AppSkeleton />;
+  }
+
 
   return (
     <ReactLenis
@@ -129,6 +144,9 @@ function AppContent() {
         {/* VIEW 1: LANDING PAGE */}
         {currentView === 'landing' ? (
           <>
+            {/* Brief branded loader on first mount */}
+            <LandingLoader />
+
             {/* TOP HERO */}
             <ScrollHero onOpenSignup={handleOpenSignup} onOpenLogin={handleOpenLogin} />
 
@@ -153,10 +171,8 @@ function AppContent() {
                 </div>
               </div>
 
-              <div ref={footerContainerRef} className="relative z-0 h-screen w-full overflow-hidden bg-black text-white">
-                <motion.div style={{ y: footerY }} className="h-full w-full">
-                  <AboutFooter />
-                </motion.div>
+              <div id="about" className="relative z-0 w-full bg-black text-white">
+                <AboutFooter />
               </div>
             </div>
           </>

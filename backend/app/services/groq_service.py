@@ -315,3 +315,260 @@ Remember: JSON only. Never invent, estimate, or state a different loan amount or
         else:
             res_fb["custom_question_answer"] = f"Regarding '{user_question.strip()}': Your financial profile shows total income ₹{m.get('total_income', 0)} against ₹{m.get('total_expense', 0)} expenses. Focus on maintaining positive monthly savings."
     return res_fb
+
+
+def generate_intelligent_statement_chat_response(
+    question: str,
+    score_data: dict = None,
+    history_scores: list = None,
+    transactions: list = None
+) -> str:
+    """
+    Generates a personalized, highly accurate financial advisory answer for user statement Q&A.
+    Incorporates:
+    - User's calculated ScoreZero rating (0-100) & score band
+    - Sub-metrics: Income Regularity, Savings Ratio, Spending Discipline, Bounce Frequency, Balance Trend
+    - Historical score trajectory & evolution across all statement evaluations
+    - Extracted transactions summary & totals
+    - Multi-tier LLM execution (Groq -> ZhipuAI/GLM) with rich rule-based fallback
+    """
+    if not question:
+        return "Please ask a specific question about your statement, credit score, or loan eligibility."
+
+    score_data = score_data or {}
+    history_scores = history_scores or []
+    transactions = transactions or []
+
+    # Extract score details
+    score_val = score_data.get('score_value')
+    if score_val is None:
+        metrics_dict = score_data.get('metrics', {})
+        score_val = metrics_dict.get('score_value', 50) if isinstance(metrics_dict, dict) else 50
+    try:
+        score_val = int(score_val)
+    except Exception:
+        score_val = 50
+
+    score_band = score_data.get('score_band', 'Fair')
+    metrics = score_data.get('metrics') or {}
+
+    ir = int(metrics.get('income_regularity', score_val))
+    sr = int(metrics.get('savings_ratio', score_val))
+    sd = int(metrics.get('spending_discipline', score_val))
+    bf = int(metrics.get('bounce_frequency', 100))
+    bt = metrics.get('balance_trend')
+    bt_val = int(bt) if bt is not None else 50
+
+    recs = score_data.get('recommendations') or []
+
+    # Transaction summary totals
+    total_income = sum(float(t.get('amount', 0)) for t in transactions if t.get('category') == 'income' or t.get('transaction_type') == 'Credit')
+    total_expense = sum(float(t.get('amount', 0)) for t in transactions if t.get('category') in ['essential_spend', 'discretionary_spend', 'bounce_penalty'] or t.get('transaction_type') == 'Debit')
+    net_savings = total_income - total_expense
+
+    income_count = len([t for t in transactions if t.get('category') == 'income' or t.get('transaction_type') == 'Credit'])
+
+    # Historical trend
+    hist_count = len(history_scores)
+    avg_hist_score = round(sum(s.get('score_value', score_val) for s in history_scores) / max(1, hist_count)) if history_scores else score_val
+
+    score_delta = None
+    if len(history_scores) >= 2:
+        curr_s = history_scores[0].get('score_value', score_val)
+        prev_s = history_scores[1].get('score_value', score_val)
+        score_delta = curr_s - prev_s
+
+    trend_note = ""
+    if score_delta is not None:
+        if score_delta > 0:
+            trend_note = f"(+ {score_delta} pts improvement vs previous statement)"
+        elif score_delta < 0:
+            trend_note = f"({score_delta} pts vs previous statement)"
+        else:
+            trend_note = "(unchanged vs previous statement)"
+
+    # Identify lowest & highest metric
+    metric_list = [
+        ('Income Regularity', ir),
+        ('Savings Ratio', sr),
+        ('Spending Discipline', sd),
+        ('Bounce Frequency', bf),
+        ('Balance Trend', bt_val)
+    ]
+    sorted_m = sorted(metric_list, key=lambda x: x[1])
+    lowest_metric = sorted_m[0]
+    highest_metric = sorted_m[-1]
+
+    # Build system prompt for LLM models (Groq / GLM)
+    prompt = f"""You are ScoreZero AI Financial Advisor. Answer the user's question accurately, concisely, and supportively based on their calculated ScoreZero credit rating and statement history.
+
+User Question: "{question}"
+
+User Credit Profile Context:
+- Current Score: {score_val}/100 ({score_band}) {trend_note}
+- Calculated Sub-Metrics (0-100):
+  * Income Regularity: {ir}/100
+  * Savings Ratio: {sr}/100
+  * Spending Discipline: {sd}/100
+  * Bounce Frequency: {bf}/100
+  * Balance Trend: {bt_val}/100
+- History Context: Evaluated across {hist_count} statement(s). Historical Average Score: {avg_hist_score}/100.
+- Statement Financial Totals: Total Inflow: ₹{total_income:,.2f}, Total Outflow: ₹{total_expense:,.2f}, Net Buffer: ₹{net_savings:,.2f}
+- Key Action Plan Targets: {", ".join(recs[:3]) if recs else "Maintain steady income & zero bounce fees."}
+
+Guidelines:
+1. Provide a direct, specific answer to the user's question.
+2. If asking about loan eligibility/approval ("when can I get loan?"):
+   - Explain the 70/100 approval benchmark.
+   - Mention their current score ({score_val}/100) and exact points gap (+{max(0, 70 - score_val)} points).
+   - Give an estimated timeline (e.g. 30-60 days if score 50-69, 60-90 days if <50, instant if >=70) and 3 specific steps to qualify.
+3. If asking "what should I do?" or how to improve:
+   - Give 3 numbered bullet points focusing first on their lowest metric ({lowest_metric[0]}: {lowest_metric[1]}/100).
+4. Use bullet points and bold formatting for readability.
+"""
+
+    answer = None
+
+    # Tier 1: Try Groq API
+    if Config.GROQ_API_KEY:
+        models_to_try = [Config.GROQ_MODEL, "llama-3.3-70b-versatile", "llama-3.1-8b-instant", "gemma2-9b-it"]
+        models_to_try = list(dict.fromkeys([m for m in models_to_try if m and m != 'mixtral-8x7b-32768']))
+        try:
+            client = Groq(api_key=Config.GROQ_API_KEY)
+            for model_name in models_to_try:
+                try:
+                    resp = client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=450,
+                        temperature=0.3,
+                        timeout=3.5
+                    )
+                    answer = resp.choices[0].message.content.strip()
+                    if answer:
+                        logger.info(f"[statement_chat] Groq model '{model_name}' generated answer.")
+                        return answer
+                except Exception as ex:
+                    logger.warning(f"[statement_chat] Groq model '{model_name}' failed: {ex}")
+        except Exception as e:
+            logger.warning(f"[statement_chat] Groq client init failed: {e}")
+
+    # Tier 2: Try Zhipu AI GLM API
+    if Config.GLM_OCR_API_KEY and not answer:
+        try:
+            headers = {"Authorization": f"Bearer {Config.GLM_OCR_API_KEY}", "Content-Type": "application/json"}
+            payload = {
+                "model": Config.GLM_TEXT_MODEL,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3
+            }
+            resp = requests.post("https://open.bigmodel.cn/api/paas/v4/chat/completions", json=payload, headers=headers, timeout=3.5)
+            if resp.status_code == 200:
+                data = resp.json()
+                answer = data["choices"][0]["message"]["content"].strip()
+                if answer:
+                    logger.info("[statement_chat] Zhipu AI GLM model generated answer.")
+                    return answer
+        except Exception as e:
+            logger.warning(f"[statement_chat] GLM API failed: {e}")
+
+    # Tier 3: Rich Rule-Based Financial Advisor Fallback
+    logger.info("[statement_chat] Using Rich Rule-Based Advisor Fallback.")
+    q_lower = question.lower()
+
+    # Intent A: Loan Eligibility & When Can I Get a Loan
+    if any(k in q_lower for k in ["loan", "eligible", "eligibility", "borrow", "lender", "limit", "when can", "approval", "qualify"]):
+        if score_val >= 70:
+            return (
+                f"Based on your calculated ScoreZero rating of **{score_val}/100 ({score_band})** across {max(1, hist_count)} statement(s) evaluated:\n\n"
+                f"✅ **Loan Approval Status: HIGH READINESS / PRE-APPROVED**\n"
+                f"• **Credit Risk**: Low. Your score of {score_val}/100 comfortably exceeds the standard lender threshold of **70/100**.\n"
+                f"• **Estimated Loan Cap**: Eligible for unsecured credit limits up to **₹{int(max(total_income, 25000) * 4):,}** (approx 4x monthly income).\n"
+                f"• **Key Drivers**: Strong Income Regularity ({ir}/100) and clean Bounce Discipline ({bf}/100).\n"
+                f"• **Next Steps**: Apply directly with lending partners or download your ScoreZero PDF report to present to underwriters."
+            )
+        elif score_val >= 50:
+            points_needed = 70 - score_val
+            return (
+                f"Based on your calculated ScoreZero score of **{score_val}/100 ({score_band})** {trend_note}:\n\n"
+                f"⚠️ **Loan Approval Status: CONDITIONAL (30–60 Days Target)**\n"
+                f"• **Current Benchmark**: You are at **{score_val}/100**. Pre-approval for unsecured loans requires a score of **70/100** (**+{points_needed} points** improvement needed).\n"
+                f"• **Key Bottlenecks**: {lowest_metric[0]} ({lowest_metric[1]}/100) and Savings Ratio ({sr}/100).\n"
+                f"• **Estimated Timeline to Qualify**: **30 to 60 days** of disciplined bank statement management.\n\n"
+                f"📋 **Action Plan to Reach Approval Threshold (70/100)**:\n"
+                f"1. **Zero-Bounce Buffer**: Maintain a ₹5,000+ minimum balance buffer to prevent auto-debit/EMI bounce penalties.\n"
+                f"2. **Boost Savings Buffer**: Cap discretionary transfers below 25% of monthly income to elevate your Savings Ratio above 60/100.\n"
+                f"3. **Income Consolidation**: Ensure all primary salary/gig earnings deposit into one central account."
+            )
+        else:
+            points_needed = 70 - score_val
+            return (
+                f"Based on your calculated ScoreZero rating of **{score_val}/100 ({score_band})**:\n\n"
+                f"❌ **Loan Approval Status: NOT YET ELIGIBLE (BUILDING PHASE)**\n"
+                f"• **Points Gap**: Your score is **{score_val}/100**. Pre-approval for loans requires **70/100** (a gap of **+{points_needed} points**).\n"
+                f"• **Primary Bottleneck**: Low {lowest_metric[0]} ({lowest_metric[1]}/100) and high outflow relative to deposits.\n"
+                f"• **Estimated Timeline**: **60 to 90 days** of consistent financial improvement.\n\n"
+                f"📋 **3-Step Remedial Plan to Qualify**:\n"
+                f"1. **Eliminate All NSF/Bounce Penalties**: Keep a standing balance buffer of ₹5,000+ at all times ({bf}/100).\n"
+                f"2. **Trim Discretionary Outflow**: Reduce non-essential transfers by 20% to build positive savings ({sr}/100).\n"
+                f"3. **Build 90-Day Stable Track Record**: Maintain steady deposit regularity over 3 consecutive months."
+            )
+
+    # Intent B: What Should I Do / Remedies / How to Improve
+    if any(k in q_lower for k in ["do", "should i", "remedy", "remedies", "improve", "action", "how to", "step", "plan", "guide"]):
+        rem1 = recs[0] if len(recs) > 0 else f"Address {lowest_metric[0]} ({lowest_metric[1]}/100) by keeping positive monthly savings."
+        rem2 = recs[1] if len(recs) > 1 else f"Maintain zero-bounce discipline ({bf}/100) with a standing ₹5,000 buffer."
+        rem3 = recs[2] if len(recs) > 2 else f"Cap non-essential spending below 25% of income to boost your Savings Ratio ({sr}/100)."
+        return (
+            f"Here is your personalized ScoreZero action plan based on your calculated score of **{score_val}/100 ({score_band})** {trend_note}:\n\n"
+            f"🎯 **Priority Action Steps**:\n"
+            f"1. **Primary Growth Area**: {rem1}\n"
+            f"2. **Bounce Discipline**: {rem2}\n"
+            f"3. **Savings & Spending**: {rem3}\n\n"
+            f"📊 **Historical Evaluation**: Analyzed across {max(1, hist_count)} statement(s) (Historical Average: **{avg_hist_score}/100**)."
+        )
+
+    # Intent C: Expenses & Spending Breakdown
+    if any(k in q_lower for k in ["expense", "spend", "vendor", "outflow", "drain", "where"]):
+        return (
+            f"Here is your statement spending breakdown (Total Outflow: **₹{total_expense:,.2f}**):\n\n"
+            f"💸 **Discipline Metrics**:\n"
+            f"• **Spending Discipline Score**: {sd}/100\n"
+            f"• **Savings Ratio Score**: {sr}/100\n"
+            f"• **Discretionary Spending**: ~{max(0, 100 - sr)}% of total deposits.\n"
+            f"• **Recommendation**: Cap discretionary expense categories at 25% of total inflow to boost your overall rating by +10 to +15 points."
+        )
+
+    # Intent D: Income & Deposits
+    if any(k in q_lower for k in ["income", "salary", "deposit", "credit", "earn"]):
+        return (
+            f"Here is your income profile based on your bank statement (Total Inflow: **₹{total_income:,.2f}**):\n\n"
+            f"📥 **Income Regularity Profile**:\n"
+            f"• **Income Regularity Score**: {ir}/100 ({score_band})\n"
+            f"• **Total Deposits Extracted**: ₹{total_income:,.2f} across {income_count} deposit entries.\n"
+            f"• **Recommendation**: Consolidate salary/gig credits into one central account to maximize Income Regularity for loan underwriting."
+        )
+
+    # Intent E: Bounce & Penalties
+    if any(k in q_lower for k in ["bounce", "penalty", "charge", "nsf", "emi"]):
+        status = "Clean! No bounce penalty incidents detected." if bf >= 90 else "Warning: Bounce/NSF incidents detected."
+        return (
+            f"Here is your bounce & penalty risk analysis:\n\n"
+            f"🚨 **Bounce Discipline Score**: {bf}/100\n"
+            f"• **Status**: {status}\n"
+            f"• **Recommendation**: Always maintain a ₹5,000+ balance buffer prior to scheduled EMI and auto-debit dates."
+        )
+
+    # Default General Response
+    rem_default = recs[0] if recs else "Maintain consistent deposit regularity and a 20%+ monthly savings ratio to build 70+ loan approval readiness."
+    return (
+        f"Regarding **'{question}'**:\n\n"
+        f"📊 **ScoreZero Financial Overview**:\n"
+        f"• **Current Rating**: **{score_val}/100 ({score_band})** {trend_note}\n"
+        f"• **Historical Average**: **{avg_hist_score}/100** across {max(1, hist_count)} evaluated statement(s).\n"
+        f"• **Statement Totals**: Inflow ₹{total_income:,.2f} | Outflow ₹{total_expense:,.2f}\n"
+        f"• **Primary Strength**: {highest_metric[0]} ({highest_metric[1]}/100)\n"
+        f"• **Key Focus Area**: {lowest_metric[0]} ({lowest_metric[1]}/100)\n\n"
+        f"💡 **Advisor Advice**: {rem_default}"
+    )
+

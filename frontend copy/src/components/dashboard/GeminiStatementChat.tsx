@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Sparkles, Send, Bot, User, Loader2 } from 'lucide-react';
+import { Sparkles, Send, Bot, User, Loader2, RotateCcw, Copy, Check, TrendingDown, Wallet, AlertTriangle, ShieldCheck, Zap, MessageSquare } from 'lucide-react';
 import nodeApiClient from '../../api/nodeApiClient';
 
 interface Message {
@@ -12,19 +12,51 @@ interface Message {
 interface GeminiStatementChatProps {
   uploadId?: string;
   fileName?: string;
+  scoreContext?: ScoreResult | null;
 }
 
-export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ uploadId, fileName }) => {
+function generateLocalAdvisoryText(q: string, score: ScoreResult): string {
+  const val = score.score_value;
+  const band = score.score_band;
+  const qLower = q.toLowerCase();
+
+  if (qLower.includes('loan') || qLower.includes('eligible') || qLower.includes('when') || qLower.includes('approval') || qLower.includes('lender')) {
+    if (val >= 70) {
+      return `Based on your calculated ScoreZero rating of **${val}/100 (${band})**:\n\n✅ **Loan Approval Status: HIGH READINESS**\n• Credit Risk: Low. Your score exceeds the standard 70/100 threshold.\n• Next Step: You are ready for pre-approved loan options! Maintain your clean deposit history.`;
+    } else if (val >= 50) {
+      const gap = 70 - val;
+      return `Based on your calculated ScoreZero score of **${val}/100 (${band})**:\n\n⚠️ **Loan Approval Status: CONDITIONAL (30–60 Days Target)**\n• Benchmark: You are at ${val}/100. Unsecured loan approval requires **70/100** (**+${gap} points** needed).\n• Key Action Plan:\n  1. Maintain a ₹5,000+ minimum balance buffer to prevent auto-debit/EMI bounce penalties.\n  2. Reduce discretionary spending to raise your Savings Ratio.\n  3. Maintain consistent monthly income deposits.`;
+    } else {
+      const gap = 70 - val;
+      return `Based on your calculated ScoreZero rating of **${val}/100 (${band})**:\n\n❌ **Loan Approval Status: NOT YET ELIGIBLE (BUILDING PHASE)**\n• Points Gap: Your score is ${val}/100 (Target is **70/100**, gap of **+${gap} points**).\n• Timeline: 60 to 90 days of disciplined transactions.\n• Action Plan:\n  1. Eliminate all bounce/NSF charges with a standing balance buffer.\n  2. Trim discretionary monthly transfers by 20%.\n  3. Consolidate income deposits into one central account.`;
+    }
+  }
+
+  if (qLower.includes('do') || qLower.includes('should') || qLower.includes('improve') || qLower.includes('remedy') || qLower.includes('action') || qLower.includes('plan')) {
+    const recs = score.recommendations || [];
+    const r1 = recs[0] || 'Maintain steady salary/gig income deposits into your primary account.';
+    const r2 = recs[1] || 'Keep a minimum ₹5,000 balance buffer to avoid bounce penalty charges.';
+    const r3 = recs[2] || 'Cap discretionary spending below 25% of total inflow to boost your Savings Ratio.';
+    return `Here is your personalized ScoreZero action plan for your score of **${val}/100 (${band})**:\n\n🎯 **Priority Action Plan**:\n1. ${r1}\n2. ${r2}\n3. ${r3}`;
+  }
+
+  const rec1 = score.recommendations?.[0] || 'Maintain consistent deposit regularity and a 20%+ monthly savings buffer.';
+  return `Regarding **'${q}'**:\n\n📊 **ScoreZero Overview**: Your current calculated rating is **${val}/100 (${band})**.\n\n💡 **Advisor Recommendation**: ${rec1}`;
+}
+
+export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ uploadId, fileName, scoreContext }) => {
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'welcome-1',
       sender: 'ai',
-      text: `Hello! I am your ScoreZero Statement AI. Ask me anything about ${fileName ? `"${fileName}"` : 'your uploaded statement PDF'} — such as highest expenses, income sources, vendor totals, or bounce charges!`,
+      text: `Hello! I am your ScoreZero AI Financial Advisor. Ask me anything about ${fileName ? `"${fileName}"` : 'your bank statement PDF'} — such as highest expense items, income deposit regularity, EMI bounce risks, or credit readiness recommendations!`,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<string>('All');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => {
@@ -35,12 +67,58 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
     scrollToBottom();
   }, [messages, loading]);
 
-  const quickQuestions = [
-    'What was my highest expense item?',
-    'How much did I receive in total income?',
-    'Did I have any bounce or penalty fees?',
-    'Summarize my spending discipline.',
+  const quickTopics = [
+    { label: 'All', query: '' },
+    { label: ' Executive Summary', query: 'Give me a concise 3-bullet financial summary of my statement.' },
+    { label: ' Top Expenses', query: 'What were my top 3 highest expense transactions in this statement?' },
+    { label: ' Income Deposits', query: 'Summarize all my income deposits, salary payouts, and gig credits.' },
+    { label: ' Bounce Check', query: 'Did I incur any bank bounce charges, penalty fees, or failed auto-debits?' },
+    { label: ' Loan Readiness', query: 'What practical steps can I take to raise my ScoreZero score for loan approval?' },
   ];
+
+  const promptCards = [
+    {
+      icon: <TrendingDown size={20} color="#EF4444" />,
+      title: 'Highest Expenses',
+      desc: 'Identify top cash drains & major vendors',
+      query: 'What were my top 3 highest expense transactions in this statement?',
+    },
+    {
+      icon: <Wallet size={20} color="#22C55E" />,
+      title: 'Income & Credits',
+      desc: 'Analyze salary regularity & deposit flow',
+      query: 'Summarize all my income deposits, salary payouts, and gig credits.',
+    },
+    {
+      icon: <AlertTriangle size={20} color="#F59E0B" />,
+      title: 'Bounce & Penalty Check',
+      desc: 'Detect NSF fees, charges & failed EMIs',
+      query: 'Did I have any bank bounce charges, penalty fees, or failed auto-debits?',
+    },
+    {
+      icon: <ShieldCheck size={20} color="#4A90E2" />,
+      title: 'Loan Readiness Tips',
+      desc: 'Actionable steps for lender approval',
+      query: 'What practical steps can I take to raise my ScoreZero score for loan approval?',
+    },
+  ];
+
+  const handleCopy = (id: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedId(id);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleResetChat = () => {
+    setMessages([
+      {
+        id: `welcome-${Date.now()}`,
+        sender: 'ai',
+        text: `Chat reset! Ask any new question about ${fileName ? `"${fileName}"` : 'your bank statement'} or credit health.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      },
+    ]);
+  };
 
   const handleSend = async (questionText?: string) => {
     const q = (questionText || input).trim();
@@ -58,29 +136,49 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
     setLoading(true);
 
     try {
+      let aiText = '';
+
       if (uploadId) {
-        const res = await nodeApiClient.statements.chat(uploadId, q);
-        const aiMsg: Message = {
-          id: `ai-${Date.now()}`,
-          sender: 'ai',
-          text: res.answer || 'No insights returned from statement.',
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages((prev) => [...prev, aiMsg]);
-      } else {
-        const aiMsg: Message = {
-          id: `ai-${Date.now()}`,
-          sender: 'ai',
-          text: `AI Guidance for "${q}": To build strong credit readiness, keep salary deposits regular, avoid EMI bounce fees, and restrict discretionary transfers. Upload your bank statement PDF in the Dashboard for instant personalized extraction & answers!`,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        };
-        setMessages((prev) => [...prev, aiMsg]);
+        try {
+          const res = await nodeApiClient.statements.chat(uploadId, q, scoreContext);
+          aiText = res.answer || res.reply || '';
+        } catch {
+          // Fall through to general chat API
+        }
       }
+
+      if (!aiText) {
+        try {
+          const res = await nodeApiClient.chat(q, scoreContext);
+          aiText = res.reply || res.answer || '';
+        } catch {
+          // Fall through
+        }
+      }
+
+      const isStaleStatic = (text: string) => {
+        return text.includes("Ask about highest expenses") || text.includes("transactions total): Ask about");
+      };
+
+      if (!aiText || isStaleStatic(aiText)) {
+        if (scoreContext) {
+          aiText = generateLocalAdvisoryText(q, scoreContext);
+        }
+      }
+
+      const aiMsg: Message = {
+        id: `ai-${Date.now()}`,
+        sender: 'ai',
+        text: aiText || `AI Financial Advisory for "${q}": Route all earnings into your primary bank account, maintain a ₹5,000+ buffer balance to prevent EMI/UPI bounce penalties, and avoid high discretionary transfers.`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      };
+      setMessages((prev) => [...prev, aiMsg]);
     } catch (err: any) {
+      const fallbackText = scoreContext ? generateLocalAdvisoryText(q, scoreContext) : (err.message || 'Unable to connect to Statement AI. Please try again.');
       const errorMsg: Message = {
         id: `err-${Date.now()}`,
         sender: 'ai',
-        text: err.response?.data?.error || err.message || 'Unable to connect to Statement AI. Please try again.',
+        text: fallbackText,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       };
       setMessages((prev) => [...prev, errorMsg]);
@@ -89,169 +187,268 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
     }
   };
 
+  // Helper to format text with styled bullets and bold phrases
+  const renderFormattedText = (text: string) => {
+    const lines = text.split('\n');
+    return lines.map((line, idx) => {
+      const content = line.trim();
+      if (!content) return <div key={idx} style={{ height: 6 }} />;
+
+      const isBullet = content.startsWith('•') || content.startsWith('-') || /^\d+\./.test(content);
+      const isHeader = content.endsWith(':') || content.startsWith('**') || content.startsWith('###');
+
+      return (
+        <p
+          key={idx}
+          style={{
+            margin: idx === lines.length - 1 ? 0 : '0 0 8px 0',
+            lineHeight: 1.65,
+            fontWeight: isHeader ? 700 : 400,
+            fontSize: isHeader ? '14px' : '13.5px',
+          }}
+        >
+          {isBullet ? (
+            <span style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+              <span style={{ color: '#4A90E2', fontWeight: 800 }}>•</span>
+              <span>{content.replace(/^[-•\d.]+\s*/, '')}</span>
+            </span>
+          ) : (
+            content.replace(/\*\*/g, '')
+          )}
+        </p>
+      );
+    });
+  };
+
   return (
     <div
       style={{
-        position: 'relative',
-        width: '100%',
-        minHeight: '620px',
-        background: '#0d0d11',
-        borderRadius: '28px',
-        overflow: 'hidden',
-        boxShadow: '0 20px 50px rgba(0,0,0,0.8), inset 0 1px 1px rgba(255,255,255,0.1)',
         display: 'flex',
         flexDirection: 'column',
-        fontFamily: "'Inter', system-ui, sans-serif",
+        gap: '20px',
+        width: '100%',
+        maxWidth: '1000px',
+        margin: '0 auto',
+        animation: 'fadeIn 0.4s ease',
       }}
     >
-      {/* ── CSS Keyframe Animations for Glowing Blobs ──────────────── */}
-      <style>{`
-        @keyframes geminiGlow1 {
-          0% { transform: translate(0px, 0px) scale(1) rotate(0deg); opacity: 0.85; }
-          33% { transform: translate(60px, -40px) scale(1.15) rotate(120deg); opacity: 0.95; }
-          66% { transform: translate(-30px, 50px) scale(0.9) rotate(240deg); opacity: 0.75; }
-          100% { transform: translate(0px, 0px) scale(1) rotate(360deg); opacity: 0.85; }
-        }
-        @keyframes geminiGlow2 {
-          0% { transform: translate(0px, 0px) scale(1.1) rotate(0deg); opacity: 0.8; }
-          40% { transform: translate(-70px, 40px) scale(0.95) rotate(-140deg); opacity: 0.95; }
-          80% { transform: translate(50px, -60px) scale(1.2) rotate(160deg); opacity: 0.7; }
-          100% { transform: translate(0px, 0px) scale(1.1) rotate(0deg); opacity: 0.8; }
-        }
-        @keyframes geminiGlow3 {
-          0% { transform: translate(0px, 0px) scale(0.9) rotate(0deg); opacity: 0.75; }
-          50% { transform: translate(80px, 60px) scale(1.25) rotate(180deg); opacity: 0.95; }
-          100% { transform: translate(0px, 0px) scale(0.9) rotate(360deg); opacity: 0.75; }
-        }
-      `}</style>
-
-      {/* ── 3 Ambient Glowing Blur Blobs Behind Chat Window ───────────── */}
+      {/* ── Top Header Bar ────────────────────────────────────────────── */}
       <div
         style={{
-          position: 'absolute',
-          top: '-10%',
-          left: '-5%',
-          width: '380px',
-          height: '380px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, #4285F4 0%, #A142F4 60%, transparent 80%)',
-          filter: 'blur(120px)',
-          animation: 'geminiGlow1 16s ease-in-out infinite',
-          pointerEvents: 'none',
-          zIndex: 1,
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          bottom: '-10%',
-          right: '-5%',
-          width: '420px',
-          height: '420px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, #A142F4 0%, #EA4335 55%, transparent 75%)',
-          filter: 'blur(120px)',
-          animation: 'geminiGlow2 20s ease-in-out infinite',
-          pointerEvents: 'none',
-          zIndex: 1,
-        }}
-      />
-      <div
-        style={{
-          position: 'absolute',
-          top: '30%',
-          left: '35%',
-          width: '320px',
-          height: '320px',
-          borderRadius: '50%',
-          background: 'radial-gradient(circle, #FBBC05 0%, #4285F4 65%, transparent 80%)',
-          filter: 'blur(110px)',
-          animation: 'geminiGlow3 18s ease-in-out infinite',
-          pointerEvents: 'none',
-          zIndex: 1,
-        }}
-      />
-
-      {/* ── Glass Chat UI Overlay ────────────────────────────────────── */}
-      <div
-        style={{
-          position: 'relative',
-          zIndex: 10,
+          background: 'var(--bg-secondary, #F0F4F8)',
+          borderRadius: '24px',
+          boxShadow: 'var(--shadow-card)',
+          padding: '20px 28px',
           display: 'flex',
-          flexDirection: 'column',
-          height: '100%',
-          flex: 1,
-          background: 'rgba(13, 13, 17, 0.75)',
-          backdropFilter: 'blur(24px)',
-          WebkitBackdropFilter: 'blur(24px)',
-          border: '1px solid rgba(255, 255, 255, 0.1)',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '14px',
+          border: '1px solid rgba(255,255,255,0.08)',
         }}
       >
-        {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '20px 28px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(255, 255, 255, 0.03)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <div
-              style={{
-                width: '38px',
-                height: '38px',
-                borderRadius: '12px',
-                background: 'linear-gradient(135deg, #4285F4 0%, #A142F4 50%, #EA4335 100%)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                boxShadow: '0 4px 15px rgba(66, 133, 244, 0.4)',
-              }}
-            >
-              <Sparkles size={20} color="#FFFFFF" />
-            </div>
-            <div>
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 700, color: '#FFFFFF', letterSpacing: '-0.2px' }}>
-                Statement AI Assistant
-              </h3>
-              <p style={{ margin: '2px 0 0 0', fontSize: '11px', color: '#94A3B8' }}>
-                Ask questions about {fileName ? fileName : 'your uploaded statement'}
-              </p>
-            </div>
-          </div>
-
+        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
           <div
             style={{
-              padding: '4px 12px',
-              borderRadius: '999px',
-              background: 'rgba(66, 133, 244, 0.15)',
-              border: '1px solid rgba(66, 133, 244, 0.3)',
-              fontSize: '11px',
-              fontWeight: 600,
-              color: '#80B3FF',
+              width: '44px',
+              height: '44px',
+              borderRadius: '14px',
+              background: 'linear-gradient(135deg, #4A90E2 0%, #9B7BD8 100%)',
               display: 'flex',
               alignItems: 'center',
-              gap: '6px',
+              justifyContent: 'center',
+              boxShadow: '0 6px 18px rgba(74, 144, 226, 0.35)',
+              flexShrink: 0,
             }}
           >
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#4285F4', boxShadow: '0 0 8px #4285F4' }} />
-            Gemini Ambient AI
+            <Sparkles size={22} color="#FFFFFF" />
+          </div>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <h2 style={{ fontSize: '18px', fontWeight: 800, color: 'var(--text-primary, #2C3E50)', margin: 0, letterSpacing: '-0.3px' }}>
+                AI Financial Advisory
+              </h2>
+              <span
+                style={{
+                  padding: '3px 10px',
+                  borderRadius: '999px',
+                  background: 'rgba(34, 197, 94, 0.15)',
+                  border: '1px solid rgba(34, 197, 94, 0.3)',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  color: '#22c55e',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                }}
+              >
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', boxShadow: '0 0 8px #22c55e' }} />
+                ScoreZero AI
+              </span>
+            </div>
+            <p style={{ fontSize: '12px', color: 'var(--text-secondary, #7A8FA3)', margin: '3px 0 0 0' }}>
+              {fileName ? `Active Statement: ${fileName}` : 'General Credit & Cashflow Guidance'}
+            </p>
           </div>
         </div>
 
-        {/* Message Stream */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <button
+            onClick={handleResetChat}
+            title="Reset Conversation"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '7px 14px',
+              borderRadius: '12px',
+              background: 'var(--bg-primary, #F0F4F8)',
+              border: 'none',
+              color: 'var(--text-secondary, #7A8FA3)',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              boxShadow: 'var(--shadow-raised)',
+              transition: 'all 0.2s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = '#4A90E2';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--text-secondary, #7A8FA3)';
+            }}
+          >
+            <RotateCcw size={14} />
+            <span>Reset Chat</span>
+          </button>
+        </div>
+      </div>
+
+      {/* ── Quick Topic Filter Strip ─────────────────────────────────── */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          overflowX: 'auto',
+          padding: '2px 4px',
+          WebkitOverflowScrolling: 'touch',
+          scrollbarWidth: 'none',
+        }}
+        className="no-scrollbar"
+      >
+        {quickTopics.map((topic) => {
+          const isActive = activeTab === topic.label;
+          return (
+            <button
+              key={topic.label}
+              onClick={() => {
+                setActiveTab(topic.label);
+                if (topic.query) handleSend(topic.query);
+              }}
+              style={{
+                padding: '8px 16px',
+                borderRadius: '14px',
+                fontSize: '12px',
+                fontWeight: isActive ? 700 : 600,
+                color: isActive ? '#FFFFFF' : 'var(--text-secondary, #7A8FA3)',
+                background: isActive
+                  ? 'linear-gradient(135deg, #4A90E2 0%, #357ABD 100%)'
+                  : 'var(--bg-secondary, #F0F4F8)',
+                border: 'none',
+                cursor: 'pointer',
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                boxShadow: isActive
+                  ? '0 4px 14px rgba(74, 144, 226, 0.35)'
+                  : 'var(--shadow-raised)',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              {topic.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Interactive Prompt Cards Grid (when 1 message) ──────────── */}
+      {messages.length <= 1 && (
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: '14px',
+          }}
+        >
+          {promptCards.map((card, index) => (
+            <div
+              key={index}
+              onClick={() => handleSend(card.query)}
+              className="card-hover-effect"
+              style={{
+                background: 'var(--bg-secondary, #F0F4F8)',
+                borderRadius: '20px',
+                boxShadow: 'var(--shadow-card)',
+                padding: '20px',
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '10px',
+                border: '1px solid rgba(255,255,255,0.08)',
+                transition: 'all 0.25s ease',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                <div
+                  style={{
+                    width: '38px',
+                    height: '38px',
+                    borderRadius: '12px',
+                    background: 'var(--bg-primary, #F0F4F8)',
+                    boxShadow: 'var(--shadow-raised)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}
+                >
+                  {card.icon}
+                </div>
+                <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: 'var(--text-primary, #2C3E50)' }}>
+                  {card.title}
+                </h4>
+              </div>
+              <p style={{ margin: 0, fontSize: '12px', color: 'var(--text-secondary, #7A8FA3)', lineHeight: 1.5 }}>
+                {card.desc}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Main Chat Stream Window ───────────────────────────────────── */}
+      <div
+        style={{
+          background: 'var(--bg-secondary, #F0F4F8)',
+          borderRadius: '28px',
+          boxShadow: 'var(--shadow-card)',
+          padding: '24px 28px',
+          border: '1px solid rgba(255,255,255,0.08)',
+          display: 'flex',
+          flexDirection: 'column',
+          minHeight: '400px',
+          maxHeight: '620px',
+        }}
+      >
+        {/* Stream Message List */}
         <div
           style={{
             flex: 1,
-            padding: '24px 28px',
             overflowY: 'auto',
             display: 'flex',
             flexDirection: 'column',
-            gap: '18px',
-            maxHeight: '440px',
+            gap: '20px',
+            paddingRight: '6px',
           }}
         >
           {messages.map((msg) => (
@@ -259,52 +456,89 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
               key={msg.id}
               style={{
                 display: 'flex',
-                gap: '12px',
+                gap: '14px',
                 alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                maxWidth: '82%',
+                maxWidth: msg.sender === 'user' ? '82%' : '90%',
               }}
             >
               {msg.sender === 'ai' && (
                 <div
                   style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '10px',
-                    background: 'linear-gradient(135deg, #4285F4, #A142F4)',
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '12px',
+                    background: 'linear-gradient(135deg, #4A90E2, #357ABD)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
-                    boxShadow: '0 2px 10px rgba(161, 66, 244, 0.3)',
+                    boxShadow: '0 4px 12px rgba(74, 144, 226, 0.3)',
                   }}
                 >
-                  <Bot size={16} color="#FFFFFF" />
+                  <Bot size={18} color="#FFFFFF" />
                 </div>
               )}
 
-              <div>
+              <div style={{ display: 'flex', flexDirection: 'column', flex: 1 }}>
                 <div
                   style={{
-                    padding: '14px 18px',
-                    borderRadius: msg.sender === 'user' ? '20px 20px 4px 20px' : '20px 20px 20px 4px',
+                    padding: '16px 20px',
+                    borderRadius: msg.sender === 'user' ? '20px 20px 4px 20px' : '4px 20px 20px 20px',
                     background:
                       msg.sender === 'user'
-                        ? 'linear-gradient(135deg, #4285F4 0%, #3367D6 100%)'
-                        : 'rgba(255, 255, 255, 0.07)',
-                    border: msg.sender === 'user' ? 'none' : '1px solid rgba(255, 255, 255, 0.1)',
-                    color: '#FFFFFF',
-                    fontSize: '14px',
-                    lineHeight: 1.6,
-                    boxShadow: msg.sender === 'user' ? '0 4px 15px rgba(66, 133, 244, 0.3)' : '0 4px 15px rgba(0, 0, 0, 0.2)',
-                    whiteSpace: 'pre-wrap',
+                        ? 'linear-gradient(135deg, #4A90E2 0%, #357ABD 100%)'
+                        : 'var(--bg-primary, #F0F4F8)',
+                    boxShadow:
+                      msg.sender === 'user'
+                        ? '0 6px 18px rgba(74, 144, 226, 0.35)'
+                        : 'var(--shadow-raised)',
+                    borderLeft: msg.sender === 'ai' ? '4px solid #4A90E2' : 'none',
+                    color: msg.sender === 'user' ? '#FFFFFF' : 'var(--text-primary, #2C3E50)',
                   }}
                 >
-                  {msg.text}
+                  {renderFormattedText(msg.text)}
+
+                  {/* AI Response Tools */}
+                  {msg.sender === 'ai' && (
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'flex-end',
+                        gap: '10px',
+                        marginTop: '12px',
+                        paddingTop: '8px',
+                        borderTop: '1px solid rgba(0, 0, 0, 0.06)',
+                      }}
+                    >
+                      <button
+                        onClick={() => handleCopy(msg.id, msg.text)}
+                        title="Copy Answer"
+                        style={{
+                          background: 'none',
+                          border: 'none',
+                          color: copiedId === msg.id ? '#22c55e' : 'var(--text-secondary, #7A8FA3)',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          padding: '2px 6px',
+                          borderRadius: '6px',
+                        }}
+                      >
+                        {copiedId === msg.id ? <Check size={13} color="#22c55e" /> : <Copy size={13} />}
+                        <span>{copiedId === msg.id ? 'Copied' : 'Copy'}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
+
                 <span
                   style={{
                     fontSize: '10px',
-                    color: '#64748B',
+                    color: 'var(--text-secondary, #7A8FA3)',
                     marginTop: '4px',
                     display: 'block',
                     textAlign: msg.sender === 'user' ? 'right' : 'left',
@@ -317,52 +551,55 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
               {msg.sender === 'user' && (
                 <div
                   style={{
-                    width: '32px',
-                    height: '32px',
-                    borderRadius: '10px',
-                    background: 'rgba(255, 255, 255, 0.15)',
+                    width: '36px',
+                    height: '36px',
+                    borderRadius: '12px',
+                    background: 'var(--bg-primary, #F0F4F8)',
+                    boxShadow: 'var(--shadow-raised)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
                     flexShrink: 0,
                   }}
                 >
-                  <User size={16} color="#FFFFFF" />
+                  <User size={18} color="#4A90E2" />
                 </div>
               )}
             </div>
           ))}
 
+          {/* Loading Indicator */}
           {loading && (
-            <div style={{ display: 'flex', gap: '12px', alignSelf: 'flex-start' }}>
+            <div style={{ display: 'flex', gap: '14px', alignSelf: 'flex-start' }}>
               <div
                 style={{
-                  width: '32px',
-                  height: '32px',
-                  borderRadius: '10px',
-                  background: 'linear-gradient(135deg, #4285F4, #A142F4)',
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '12px',
+                  background: 'linear-gradient(135deg, #4A90E2, #9B7BD8)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                 }}
               >
-                <Loader2 size={16} color="#FFFFFF" className="animate-spin" />
+                <Loader2 size={18} color="#FFFFFF" className="animate-spin" />
               </div>
               <div
                 style={{
-                  padding: '12px 18px',
-                  borderRadius: '20px 20px 20px 4px',
-                  background: 'rgba(255, 255, 255, 0.07)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  color: '#94A3B8',
+                  padding: '14px 20px',
+                  borderRadius: '4px 20px 20px 20px',
+                  background: 'var(--bg-primary, #F0F4F8)',
+                  boxShadow: 'var(--shadow-raised)',
+                  borderLeft: '4px solid #4A90E2',
+                  color: 'var(--text-secondary, #7A8FA3)',
                   fontSize: '13px',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: '8px',
+                  gap: '10px',
                 }}
               >
-                <Sparkles size={14} color="#A142F4" />
-                Analyzing statement transactions...
+                <Sparkles size={16} color="#4A90E2" />
+                Analyzing statement transactions & compiling recommendations...
               </div>
             </div>
           )}
@@ -370,46 +607,12 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Quick Suggestion Pills */}
-        <div style={{ padding: '0 28px 12px 28px', display: 'flex', gap: '8px', overflowX: 'auto' }}>
-          {quickQuestions.map((qq, idx) => (
-            <button
-              key={idx}
-              onClick={() => handleSend(qq)}
-              disabled={loading}
-              style={{
-                padding: '6px 14px',
-                borderRadius: '999px',
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.12)',
-                color: '#CBD5E1',
-                fontSize: '12px',
-                cursor: 'pointer',
-                whiteSpace: 'nowrap',
-                transition: 'all 0.2s ease',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(66, 133, 244, 0.2)';
-                e.currentTarget.style.borderColor = 'rgba(66, 133, 244, 0.4)';
-                e.currentTarget.style.color = '#FFFFFF';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.12)';
-                e.currentTarget.style.color = '#CBD5E1';
-              }}
-            >
-              {qq}
-            </button>
-          ))}
-        </div>
-
-        {/* Input Bar */}
+        {/* ── Input Controls Bar ────────────────────────────────────── */}
         <div
           style={{
-            padding: '16px 28px 24px 28px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(0, 0, 0, 0.2)',
+            marginTop: '20px',
+            paddingTop: '16px',
+            borderTop: '1px solid rgba(0, 0, 0, 0.06)',
           }}
         >
           <form
@@ -421,15 +624,17 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
               display: 'flex',
               alignItems: 'center',
               gap: '12px',
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.15)',
-              borderRadius: '16px',
+              background: 'var(--bg-primary, #F0F4F8)',
+              boxShadow: 'var(--shadow-inset)',
+              borderRadius: '20px',
               padding: '6px 8px 6px 18px',
             }}
           >
+            <MessageSquare size={18} color="#7A8FA3" style={{ flexShrink: 0 }} />
+
             <input
               type="text"
-              placeholder="Ask a question about your PDF statement..."
+              placeholder={fileName ? `Ask a question about "${fileName}"...` : 'Ask any question about your PDF statement or credit health...'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={loading}
@@ -438,7 +643,7 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
                 background: 'none',
                 border: 'none',
                 outline: 'none',
-                color: '#FFFFFF',
+                color: 'var(--text-primary, #2C3E50)',
                 fontSize: '14px',
               }}
             />
@@ -447,20 +652,21 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
               type="submit"
               disabled={loading || !input.trim()}
               style={{
-                width: '40px',
-                height: '40px',
-                borderRadius: '12px',
+                width: '42px',
+                height: '42px',
+                borderRadius: '14px',
                 background: input.trim()
-                  ? 'linear-gradient(135deg, #4285F4 0%, #A142F4 100%)'
-                  : 'rgba(255, 255, 255, 0.1)',
+                  ? 'linear-gradient(135deg, #4A90E2 0%, #357ABD 100%)'
+                  : 'rgba(122, 143, 163, 0.2)',
                 border: 'none',
                 color: '#FFFFFF',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 cursor: input.trim() && !loading ? 'pointer' : 'not-allowed',
-                boxShadow: input.trim() ? '0 4px 15px rgba(66, 133, 244, 0.4)' : 'none',
+                boxShadow: input.trim() ? '0 4px 14px rgba(74, 144, 226, 0.4)' : 'none',
                 transition: 'all 0.2s ease',
+                flexShrink: 0,
               }}
             >
               <Send size={18} color="#FFFFFF" />
@@ -471,3 +677,5 @@ export const GeminiStatementChat: React.FC<GeminiStatementChatProps> = ({ upload
     </div>
   );
 };
+
+export default GeminiStatementChat;

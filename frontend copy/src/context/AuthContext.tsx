@@ -9,11 +9,39 @@ interface AuthContextType {
   isLoading: boolean;
   login: (token: string, user: User) => void;
   signup: (token: string, user: User) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+
+/** 
+ * Try to restore the user from Supabase session alone — no backend needed.
+ * This is fast and works even when the Flask/Node backend is offline.
+ */
+async function getUserFromSupabaseSession(): Promise<User | null> {
+  if (!isSupabaseConfigured) return null;
+  try {
+    const { data } = await supabase.auth.getSession();
+    const session = data?.session;
+    if (!session) return null;
+    const u = session.user;
+    const name =
+      u.user_metadata?.full_name ||
+      u.user_metadata?.name ||
+      (u.email ? u.email.split('@')[0] : 'User');
+    return {
+      user_id: u.id,
+      email: u.email || '',
+      name,
+      avatar_url: u.user_metadata?.avatar_url || u.user_metadata?.picture,
+      email_verified: Boolean(u.email_confirmed_at),
+      created_at: u.created_at,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -22,19 +50,56 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const refreshProfile = async () => {
     const currentToken = localStorage.getItem('scorezero_token');
+
     if (!currentToken) {
-      setUser(null);
-      setToken(null);
+      // No token at all — try Supabase session as a last resort
+      const supabaseUser = await getUserFromSupabaseSession();
+      if (supabaseUser) {
+        // get the supabase access token
+        try {
+          const { data } = await supabase.auth.getSession();
+          if (data?.session?.access_token) {
+            localStorage.setItem('scorezero_token', data.session.access_token);
+            setToken(data.session.access_token);
+          }
+        } catch { /* ignore */ }
+        setUser(supabaseUser);
+      } else {
+        setUser(null);
+        setToken(null);
+      }
       setIsLoading(false);
       return;
     }
 
+    // --- Strategy: Try Supabase session first (fast, no backend needed) ---
+    // Then attempt backend getMe() in background to sync server-side data.
+    const supabaseUser = await getUserFromSupabaseSession();
+    if (supabaseUser) {
+      // Immediately show user from Supabase — no loading delay
+      setUser(supabaseUser);
+      setToken(currentToken);
+      setIsLoading(false);
+
+      // Background sync with backend (non-blocking)
+      scoreZeroAPI.auth.getMe()
+        .then((res) => { setUser(res.user); })
+        .catch(() => { /* backend offline — use Supabase data */ });
+      return;
+    }
+
+    // --- Fallback: try backend getMe() with a short timeout ---
     try {
-      const res = await scoreZeroAPI.auth.getMe();
-      setUser(res.user);
+      const res = await Promise.race([
+        scoreZeroAPI.auth.getMe(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('auth_timeout')), 5000)
+        ),
+      ]);
+      setUser((res as { user: User }).user);
       setToken(currentToken);
     } catch {
-      // Invalid/expired token
+      // Invalid/expired token or backend unavailable — clear token
       localStorage.removeItem('scorezero_token');
       localStorage.removeItem('supabase_token');
       setUser(null);
@@ -67,6 +132,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           localStorage.setItem('supabase_token', accessToken);
           setToken(accessToken);
           setUser(authenticatedUser);
+          setIsLoading(false);
         }
       });
 
@@ -88,10 +154,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser(newUser);
   };
 
-  const logout = () => {
+  const logout = async () => {
     localStorage.removeItem('scorezero_token');
+    localStorage.removeItem('supabase_token');
     setToken(null);
     setUser(null);
+    // Also sign out from Supabase to clear session cookies & prevent auto-login on refresh
+    if (isSupabaseConfigured) {
+      try {
+        await supabase.auth.signOut();
+      } catch {
+        // Ignore sign-out errors
+      }
+    }
   };
 
   return (

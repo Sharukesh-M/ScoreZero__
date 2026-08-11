@@ -21,3 +21,11 @@ Thumbs.db
 .env.local
 .env.production
 .env.development
+
+# Heavy assets / frames
+frontend copy/public/frames/
+
+# PDF generation scripts & outputs (do not push)
+generate_pdf.py
+pdf_assets/
+*.pdf

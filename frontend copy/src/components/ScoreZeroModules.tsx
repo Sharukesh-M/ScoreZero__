@@ -6,41 +6,42 @@ import './ScrollStack.css';
 const projects = [
   {
     id: "001",
-    title: "User Upload & PDF Ingestion Engine",
-    stack: "Python / OCR / PDF Parsing / AES-256",
-    description: "Accepts uploaded PDF bank statements from all major financial institutions, performing encrypted line-item extraction and transaction tagging in real time.",
+    title: "Upload",
+    stack: "Secure PDF Ingestion / AES-256 Encryption / Bank Statement Parsing",
+    description: "Securely upload your bank statement PDF from any major Indian bank — HDFC, SBI, ICICI, Axis and more. Files are processed entirely in-memory with end-to-end encryption and are never stored on disk.",
     links: { live: "#", code: "#" },
-    image: "/img1.jpg",
+    image: "/img1.png",
     cta: "Explore Module"
   },
   {
     id: "002",
-    title: "Statement Anomaly & Fraud Detector",
-    stack: "PyTorch / Computer Vision / Heuristic Engine",
-    description: "Scans uploaded bank statement PDFs for metadata tampering, circular funds transfers, undisclosed debt obligations, and non-sufficient funds (NSF) charges.",
+    title: "Analyse",
+    stack: "AI Deep Scan / Anomaly Detection / Transaction Tagging",
+    description: "AI-powered analysis scans every transaction line — detecting circular transfers, bounce charges, NSF fees, metadata tampering, and undisclosed debt patterns to ensure statement integrity.",
     links: { live: "#", code: "#" },
-    image: "/img2.jpg",
+    image: "/img2.png",
     cta: "Explore Module"
   },
   {
     id: "003",
-    title: "Metric Score Model (0–100)",
-    stack: "Machine Learning / Credit Scoring / Cashflow Analytics",
-    description: "Computes a real-time credit risk metric score from 0 to 100 based on cashflow velocity, income stability, and debt-to-income ratios.",
+    title: "Metrics Calculation",
+    stack: "Credit Scoring Engine / Cashflow Analytics / 0–100 Risk Score",
+    description: "Computes a real-time ScoreZero score from 0 to 100 across five weighted metrics — Income Regularity, Savings Ratio, Spending Discipline, Bounce Frequency, and Balance Trend.",
     links: { live: "#", code: "#" },
-    image: "/img3.jpg",
+    image: "/img3.png",
     cta: "Explore Module"
   },
   {
     id: "004",
-    title: "AI Suggestion & LOS Webhook Gateway",
-    stack: "REST API / OAuth 2.0 / Webhooks / Underwriting",
-    description: "Delivers automated loan officer approval suggestions, interest rate optimization recommendations, and instant webhooks directly to Loan Origination Systems (LOS).",
+    title: "AI Suggestion",
+    stack: "Gemini AI / Actionable Recommendations / Loan Readiness Report",
+    description: "Gemini AI generates a personalised credit action plan — highlighting your strongest metrics, pinpointing gaps, and providing step-by-step targets to improve your score and unlock loan eligibility.",
     links: { live: "#", code: "#" },
-    image: "/img1.jpg",
+    image: "/img4.png",
     cta: "Explore Module"
   },
 ];
+
 
 interface ScrollStackCardProps {
   project: typeof projects[0];

@@ -15,10 +15,16 @@ const nodeApi = axios.create({
   timeout: 60_000,
 });
 
-// Attach the Supabase session JWT automatically
+// Attach the Supabase session JWT or localStorage token automatically
 nodeApi.interceptors.request.use(async (config) => {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token;
+  let token: string | undefined;
+  try {
+    const { data } = await supabase.auth.getSession();
+    token = data.session?.access_token;
+  } catch {}
+  if (!token) {
+    token = localStorage.getItem('scorezero_token') || localStorage.getItem('supabase_token') || undefined;
+  }
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -165,8 +171,8 @@ export const nodeApiClient = {
       await nodeApi.delete(`/statements/${uploadId}`);
     },
 
-    chat: async (uploadId: string, question: string): Promise<{ answer: string; question: string; upload_id: string }> => {
-      const res = await nodeApi.post<{ answer: string; question: string; upload_id: string }>(`/statements/${uploadId}/chat`, { question });
+    chat: async (uploadId: string, question: string, context?: any): Promise<{ answer: string; question: string; upload_id: string }> => {
+      const res = await nodeApi.post<{ answer: string; question: string; upload_id: string }>(`/statements/${uploadId}/chat`, { question, context });
       return res.data;
     },
   },
@@ -188,6 +194,12 @@ export const nodeApiClient = {
       const res = await nodeApi.post(`/scores/${uploadId}/report`);
       return res.data.report;
     },
+  },
+
+  chat: async (message: string, context?: any): Promise<{ reply: string; answer: string }> => {
+    const res = await nodeApi.post<{ reply?: string; answer?: string }>('/api/chat', { message, question: message, context });
+    const text = res.data.reply || res.data.answer || 'No response generated.';
+    return { reply: text, answer: text };
   },
 };
 

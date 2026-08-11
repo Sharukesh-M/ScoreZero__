@@ -293,3 +293,88 @@ body {
 .animate-fadeIn {
   animation: portfolio-fadeIn 0.4s ease forwards;
 }
+
+/* ══════════════════════════════════════════════════════════════════
+   GLOBAL MOBILE RESPONSIVENESS & TOUCH UTILITIES
+   ══════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px) {
+  /* Navigation Bar Mobile Layout */
+  .top-nav-bar {
+    padding: 10px 12px !important;
+  }
+  
+  /* Main Containers Padding on Mobile */
+  main {
+    padding: 16px 12px 60px !important;
+  }
+  
+  /* Gemini Statement Chat & AI Advisory Mobile Layout */
+  .gemini-chat-container {
+    border-radius: 16px !important;
+    min-height: 480px !important;
+    height: clamp(480px, 80vh, 700px) !important;
+  }
+  
+  /* Form Inputs touch sizing */
+  input[type="text"], input[type="password"], input[type="email"], select, textarea {
+    font-size: 16px !important; /* Prevents auto-zoom on iOS safari */
+  }
+
+  /* Responsive Flex & Grids */
+  .mobile-stack {
+    flex-direction: column !important;
+    align-items: stretch !important;
+  }
+
+  .mobile-grid-1col {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+/* Touch container scrollbars hiding */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   NAVIGATION RESPONSIVE LAYOUT (DESKTOP CENTERED, MOBILE SIDEBAR)
+   ══════════════════════════════════════════════════════════════════ */
+@keyframes slideInLeft {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.mobile-only-flex {
+  display: none !important;
+}
+
+.desktop-only-flex {
+  display: flex !important;
+}
+
+.desktop-nav-center {
+  display: flex !important;
+}
+
+@media (max-width: 767px) {
+  .mobile-only-flex {
+    display: flex !important;
+  }
+  .desktop-only-flex {
+    display: none !important;
+  }
+  .desktop-nav-center {
+    display: none !important;
+  }
+}
+
+w

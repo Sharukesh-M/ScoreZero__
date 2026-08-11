@@ -18,7 +18,7 @@ def create_app():
     from app.routes.upload_routes import upload_bp
     from app.routes.score_routes import score_bp
 
-    app.register_blueprint(auth_bp)
+    app.register_blueprint(auth_bp, url_prefix='/auth')
     app.register_blueprint(upload_bp)
     app.register_blueprint(score_bp)
 
