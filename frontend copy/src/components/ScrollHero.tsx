@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useLenis } from 'lenis/react';
 import { Sparkles, Upload, FileCode, Award, CheckCircle2, ChevronRight } from 'lucide-react';
 
+const TOTAL_FRAMES = 300;
+
 export interface ScrollHeroProps {
   onOpenSignup?: () => void;
   onOpenLogin?: () => void;
@@ -19,24 +21,17 @@ const PROCESS_STEPS = [
 export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
   const sectionRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   const [isLoaded, setIsLoaded] = useState(false);
-
-  // Ref-based scroll ratio tracking to avoid re-rendering React component on every frame
-  const scrollRatioRef = useRef<number>(0);
-
-  // State updated ONLY when active process step ID changes (e.g. step 1 -> step 2)
   const [activeStepId, setActiveStepId] = useState<number>(1);
   const [isLoanApproved, setIsLoanApproved] = useState<boolean>(false);
 
+  const framesRef = useRef<(HTMLImageElement | null)[]>(new Array(TOTAL_FRAMES).fill(null));
+  const currentFrameIndexRef = useRef<number>(0);
+  const lastDrawnIndexRef = useRef<number>(-1);
   const rafIdRef = useRef<number | null>(null);
   const prefersReducedMotionRef = useRef<boolean>(false);
-  const targetTimeRef = useRef<number>(0);
-  const lastTimeRef = useRef<number>(-1);
-  const isSeekingRef = useRef<boolean>(false);
 
-  // Cached layout measurements
   const geometryRef = useRef<{ top: number; height: number; maxScroll: number }>({ top: 0, height: 0, maxScroll: 0 });
 
   const markLoaded = () => {
@@ -56,13 +51,31 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     geometryRef.current = { top, height, maxScroll };
   };
 
-  // High-precision subpixel-aligned video frame drawing on canvas
-  const drawVideoFrame = () => {
+  // High-precision subpixel-aligned canvas frame drawing with nearest-frame fallback
+  const drawFrame = (index: number) => {
     const canvas = canvasRef.current;
-    const video = videoRef.current;
-    if (!canvas || !video || video.readyState < 2) return;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Find requested frame or nearest already-loaded frame
+    let img = framesRef.current[index];
+    if (!img || !img.complete || img.naturalWidth === 0) {
+      for (let offset = 1; offset < TOTAL_FRAMES; offset++) {
+        const prev = framesRef.current[index - offset];
+        if (prev && prev.complete && prev.naturalWidth > 0) {
+          img = prev;
+          break;
+        }
+        const next = framesRef.current[index + offset];
+        if (next && next.complete && next.naturalWidth > 0) {
+          img = next;
+          break;
+        }
+      }
+    }
+
+    if (!img || !img.complete || img.naturalWidth === 0) return;
 
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -82,13 +95,10 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
 
     ctx.save();
     ctx.scale(dpr, dpr);
-
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    const videoW = video.videoWidth || 1920;
-    const videoH = video.videoHeight || 1080;
-    const videoAspect = videoW / videoH;
+    const imgAspect = img.naturalWidth / img.naturalHeight;
     const canvasAspect = displayW / displayH;
 
     let drawWidth = displayW;
@@ -96,42 +106,75 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     let offsetX = 0;
     let offsetY = 0;
 
-    if (canvasAspect > videoAspect) {
-      drawHeight = displayW / videoAspect;
+    if (canvasAspect > imgAspect) {
+      drawHeight = displayW / imgAspect;
       offsetY = (displayH - drawHeight) / 2;
     } else {
-      drawWidth = displayH * videoAspect;
+      drawWidth = displayH * imgAspect;
       offsetX = (displayW - drawWidth) / 2;
     }
 
     ctx.clearRect(0, 0, displayW, displayH);
-    try {
-      ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
-    } catch {
-      // Ignore transient seek draw errors
-    }
+    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
     ctx.restore();
+
+    lastDrawnIndexRef.current = index;
   };
 
-  // Preload video & motion preferences
+  // Preload WebP images progressively
   useEffect(() => {
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     prefersReducedMotionRef.current = motionQuery.matches;
 
     const handleMotionChange = (e: MediaQueryListEvent) => {
       prefersReducedMotionRef.current = e.matches;
-      drawVideoFrame();
+      drawFrame(currentFrameIndexRef.current);
     };
     motionQuery.addEventListener('change', handleMotionChange);
 
     updateGeometry();
     window.addEventListener('resize', updateGeometry);
 
-    const video = videoRef.current;
-    if (video && video.readyState >= 2) {
-      markLoaded();
-      drawVideoFrame();
+    // Priority 1: Keyframe sample (every 5th frame) loads first (< 100ms)
+    const priorityIndices: number[] = [];
+    const remainingIndices: number[] = [];
+
+    for (let i = 0; i < TOTAL_FRAMES; i++) {
+      if (i % 5 === 0) {
+        priorityIndices.push(i);
+      } else {
+        remainingIndices.push(i);
+      }
     }
+
+    let priorityLoadedCount = 0;
+    const loadFrame = (i: number, isPriority: boolean) => {
+      const img = new Image();
+      const padded = String(i + 1).padStart(5, '0');
+      img.src = `/frames_webp/frame_${padded}.webp`;
+
+      img.onload = () => {
+        framesRef.current[i] = img;
+        if (isPriority) {
+          priorityLoadedCount++;
+          if (priorityLoadedCount === priorityIndices.length || priorityLoadedCount >= 10) {
+            markLoaded();
+            drawFrame(currentFrameIndexRef.current);
+          }
+        }
+      };
+      img.onerror = () => {
+        // Fallback silently if single frame fails
+      };
+    };
+
+    // Load priority keyframes immediately
+    priorityIndices.forEach((i) => loadFrame(i, true));
+
+    // Load remaining intermediate frames in background batch
+    setTimeout(() => {
+      remainingIndices.forEach((i) => loadFrame(i, false));
+    }, 100);
 
     return () => {
       motionQuery.removeEventListener('change', handleMotionChange);
@@ -139,7 +182,6 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     };
   }, []);
 
-  // Update target time and active step based on scroll position
   const calculateScroll = () => {
     if (prefersReducedMotionRef.current) return;
     const { top, maxScroll } = geometryRef.current;
@@ -147,9 +189,10 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
 
     const scrollTop = window.scrollY - top;
     const progress = Math.min(Math.max(scrollTop / maxScroll, 0), 1);
-    scrollRatioRef.current = progress;
 
-    // Calculate active step without re-rendering component on every frame
+    const targetIndex = Math.min(Math.max(Math.floor(progress * (TOTAL_FRAMES - 1)), 0), TOTAL_FRAMES - 1);
+    currentFrameIndexRef.current = targetIndex;
+
     const currentStep = PROCESS_STEPS.find(
       (step) => progress >= step.range[0] && (progress < step.range[1] || step.id === 5)
     ) || PROCESS_STEPS[0];
@@ -162,39 +205,17 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     if (nextApproved !== isLoanApproved) {
       setIsLoanApproved(nextApproved);
     }
-
-    const video = videoRef.current;
-    if (video && video.duration) {
-      targetTimeRef.current = progress * video.duration;
-    }
   };
 
-  // Apply video currentTime seeking only when browser is ready (non-blocking)
-  const applySeek = () => {
-    const video = videoRef.current;
-    if (!video || !video.duration) return;
-
-    // Do NOT interrupt an ongoing browser seek operation
-    if (video.seeking || isSeekingRef.current) return;
-
-    const targetTime = targetTimeRef.current;
-    // Apply 33ms threshold (~1 frame at 30fps) to eliminate microscopic seeking stutter
-    if (Math.abs(targetTime - lastTimeRef.current) >= 0.033) {
-      lastTimeRef.current = targetTime;
-      isSeekingRef.current = true;
-      video.currentTime = targetTime;
-    }
-  };
-
-  // rAF rendering loop
   useEffect(() => {
     let active = true;
 
     const renderLoop = () => {
       if (!active) return;
       calculateScroll();
-      applySeek();
-      drawVideoFrame();
+      if (currentFrameIndexRef.current !== lastDrawnIndexRef.current) {
+        drawFrame(currentFrameIndexRef.current);
+      }
       rafIdRef.current = requestAnimationFrame(renderLoop);
     };
 
@@ -228,42 +249,15 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
       ref={sectionRef}
       className="relative h-[300vh] w-full bg-[#08101C] text-white touch-pan-y"
     >
-      {/* Hidden Video Source element */}
-      <video
-        ref={videoRef}
-        src="/hero-animation.mp4"
-        preload="auto"
-        playsInline
-        muted
-        className="hidden"
-        onLoadedData={() => {
-          markLoaded();
-          drawVideoFrame();
-        }}
-        onCanPlay={() => {
-          markLoaded();
-          drawVideoFrame();
-        }}
-        onSeeked={() => {
-          isSeekingRef.current = false;
-          drawVideoFrame();
-          applySeek(); // Process next pending seek target immediately
-        }}
-      />
-
-      {/* Sticky Viewport Container */}
       <div className="sticky top-0 h-screen w-full overflow-hidden">
-        {/* Canvas Element */}
         <canvas
           ref={canvasRef}
           className="absolute inset-0 w-full h-full object-cover z-0 transition-opacity duration-500"
           style={{ opacity: isLoaded ? 1 : 0 }}
         />
 
-        {/* Mobile-Optimized White-Themed AI Score Pipeline Component */}
         {isLoaded && (
           <div className="absolute bottom-4 left-4 right-4 sm:left-auto sm:right-8 sm:bottom-16 z-30 flex flex-col gap-2.5 p-3.5 sm:p-5 bg-white/95 backdrop-blur-xl border border-slate-200/90 rounded-2xl shadow-2xl shadow-slate-900/30 transition-all duration-300 pointer-events-auto max-w-full sm:max-w-md text-slate-900">
-            {/* Header / Active Stage Title */}
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <span className="relative flex h-2.5 w-2.5">
@@ -276,7 +270,6 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
               </div>
             </div>
 
-            {/* Interactive Process Pipeline Steps */}
             <div className="flex items-center justify-between gap-1 pt-0.5 overflow-x-auto no-scrollbar">
               {PROCESS_STEPS.map((step, idx) => {
                 const Icon = step.icon;
@@ -314,7 +307,6 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
               })}
             </div>
 
-            {/* Loan Approved Banner at last frame lock */}
             {isLoanApproved && (
               <div className="flex items-center justify-center gap-1.5 sm:gap-2 mt-0.5 py-1.5 sm:py-2 px-3 bg-emerald-500 text-white font-black text-[11px] sm:text-xs uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-500/30 animate-pulse border border-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
@@ -329,5 +321,6 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
 };
 
 export default ScrollHero;
+
 
 
