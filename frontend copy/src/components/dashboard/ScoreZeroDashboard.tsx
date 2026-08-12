@@ -1008,11 +1008,14 @@ const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory, onGoToUpload
   const handleDelete = async (e: React.MouseEvent, item: HistoryScore) => {
     e.stopPropagation();
     const idToDelete = item.upload_id || item.score_id;
+    
+    // Optimistically update UI state immediately
+    setHistory((prev) => prev.filter((h) => h.upload_id !== idToDelete && h.score_id !== idToDelete));
+    const newTotal = Math.max(0, total - 1);
+    setTotal(newTotal);
+
     try {
       await nodeApiClient.statements.delete(idToDelete);
-      const newTotal = Math.max(0, total - 1);
-      setTotal(newTotal);
-
       if (onDeleteHistory) onDeleteHistory(idToDelete);
 
       if (newTotal === 0) {
@@ -1022,11 +1025,11 @@ const HistorySection = ({ onLoad, onSelectHistory, onDeleteHistory, onGoToUpload
         const maxPage = Math.ceil(newTotal / PER_PAGE) - 1;
         const targetPage = Math.min(page, Math.max(0, maxPage));
         setPage(targetPage);
-        // Automatically reload targetPage so the next record shifts into view!
         load(targetPage);
       }
     } catch {
-      // ignore
+      // Reload on error fallback
+      load(page);
     }
   };
 

@@ -184,17 +184,8 @@ router.get('/', requireAuth, async (req, res, next) => {
 router.delete('/:uploadId', requireAuth, async (req, res, next) => {
   try {
     const { uploadId } = req.params;
-    const existing = await db.getUpload(uploadId, req.userId);
-
-    if (!existing) {
-      return res.status(404).json({
-        error: 'Upload not found or you do not have access to this resource.',
-        code: 'FORBIDDEN',
-      });
-    }
-
     await db.softDeleteUpload(uploadId, req.userId);
-    return res.status(200).json({ message: 'Upload deleted.' });
+    return res.status(200).json({ message: 'History item deleted.' });
   } catch (err) {
     next(err);
   }

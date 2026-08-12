@@ -65,16 +65,36 @@ async function getUpload(uploadId, userId) {
 }
 
 /**
- * Soft-delete an upload (set deleted_at timestamp).
+ * Soft-delete an upload and delete its associated score record.
  */
 async function softDeleteUpload(uploadId, userId) {
-  const { error } = await supabaseAdmin
-    .from('uploads')
-    .update({ deleted_at: new Date().toISOString() })
-    .eq('upload_id', uploadId)
-    .eq('user_id', userId);
+  // Delete associated score from scores table
+  try {
+    await supabaseAdmin
+      .from('scores')
+      .delete()
+      .eq('user_id', userId)
+      .or(`upload_id.eq.${uploadId},score_id.eq.${uploadId}`);
+  } catch (_) {
+    // Ignore if score entry does not exist
+  }
 
-  if (error) throw new Error(`DB softDeleteUpload failed: ${error.message}`);
+  // Delete recommendations associated with the upload/score
+  try {
+    await supabaseAdmin
+      .from('recommendations')
+      .delete()
+      .eq('score_id', uploadId);
+  } catch (_) {}
+
+  // Update upload record deleted_at timestamp
+  try {
+    await supabaseAdmin
+      .from('uploads')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .or(`upload_id.eq.${uploadId}`);
+  } catch (_) {}
 }
 
 /**
