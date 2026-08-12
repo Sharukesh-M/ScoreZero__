@@ -8,7 +8,10 @@
 import axios from 'axios';
 import { supabase } from '../lib/supabase';
 
-const NODE_API_BASE = import.meta.env.VITE_NODE_API_URL || 'http://localhost:4000';
+const NODE_API_BASE =
+  import.meta.env.VITE_NODE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  'https://scorezero-backend.onrender.com';
 
 const nodeApi = axios.create({
   baseURL: NODE_API_BASE,

@@ -58,10 +58,10 @@ export const InlineChatPanel: React.FC<InlineChatPanelProps> = ({ score }) => {
         recommendations: score.recommendations,
       } : null;
 
-      // Request response from backend /api/chat or client-side advisory logic
       let assistantReply = "";
       try {
-        const res = await fetch(`${import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000'}/api/chat`, {
+        const apiBase = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_NODE_API_URL || 'https://scorezero-backend.onrender.com';
+        const res = await fetch(`${apiBase}/api/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
