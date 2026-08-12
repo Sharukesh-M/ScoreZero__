@@ -22,15 +22,38 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [isLoaded, setIsLoaded] = useState(false);
-  const [scrollRatio, setScrollRatio] = useState(0);
+
+  // Ref-based scroll ratio tracking to avoid re-rendering React component on every frame
+  const scrollRatioRef = useRef<number>(0);
+
+  // State updated ONLY when active process step ID changes (e.g. step 1 -> step 2)
+  const [activeStepId, setActiveStepId] = useState<number>(1);
+  const [isLoanApproved, setIsLoanApproved] = useState<boolean>(false);
 
   const rafIdRef = useRef<number | null>(null);
   const prefersReducedMotionRef = useRef<boolean>(false);
-  const lastTargetTimeRef = useRef<number>(-1);
+  const targetTimeRef = useRef<number>(0);
+  const lastTimeRef = useRef<number>(-1);
+  const isSeekingRef = useRef<boolean>(false);
+
+  // Cached layout measurements
+  const geometryRef = useRef<{ top: number; height: number; maxScroll: number }>({ top: 0, height: 0, maxScroll: 0 });
 
   const markLoaded = () => {
-    setIsLoaded(true);
-    onLoaded?.();
+    if (!isLoaded) {
+      setIsLoaded(true);
+      onLoaded?.();
+    }
+  };
+
+  const updateGeometry = () => {
+    const section = sectionRef.current;
+    if (!section) return;
+    const rect = section.getBoundingClientRect();
+    const top = window.scrollY + rect.top;
+    const height = section.offsetHeight;
+    const maxScroll = Math.max(height - window.innerHeight, 1);
+    geometryRef.current = { top, height, maxScroll };
   };
 
   // High-precision subpixel-aligned video frame drawing on canvas
@@ -85,7 +108,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     try {
       ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
     } catch {
-      // Ignore transient draw errors while video seeks
+      // Ignore transient seek draw errors
     }
     ctx.restore();
   };
@@ -101,68 +124,76 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
     };
     motionQuery.addEventListener('change', handleMotionChange);
 
+    updateGeometry();
+    window.addEventListener('resize', updateGeometry);
+
     const video = videoRef.current;
-    if (video) {
-      if (video.readyState >= 2) {
-        markLoaded();
-        drawVideoFrame();
-      }
+    if (video && video.readyState >= 2) {
+      markLoaded();
+      drawVideoFrame();
     }
 
     return () => {
       motionQuery.removeEventListener('change', handleMotionChange);
+      window.removeEventListener('resize', updateGeometry);
     };
   }, []);
 
-  // Update canvas sizing matching DPR for sharp crispness
-  useEffect(() => {
-    const updateCanvasSize = () => {
-      drawVideoFrame();
-    };
-
-    updateCanvasSize();
-    window.addEventListener('resize', updateCanvasSize);
-
-    return () => {
-      window.removeEventListener('resize', updateCanvasSize);
-    };
-  }, [isLoaded]);
-
-  // Calculate scroll progress and sync video currentTime
-  const updateScrollProgress = () => {
+  // Update target time and active step based on scroll position
+  const calculateScroll = () => {
     if (prefersReducedMotionRef.current) return;
-    const section = sectionRef.current;
-    if (!section) return;
-
-    const rect = section.getBoundingClientRect();
-    const sectionOffsetTop = window.scrollY + rect.top;
-    const sectionHeight = section.offsetHeight;
-
-    const scrollTop = window.scrollY - sectionOffsetTop;
-    const maxScroll = sectionHeight - window.innerHeight;
-
+    const { top, maxScroll } = geometryRef.current;
     if (maxScroll <= 0) return;
 
+    const scrollTop = window.scrollY - top;
     const progress = Math.min(Math.max(scrollTop / maxScroll, 0), 1);
-    setScrollRatio(progress);
+    scrollRatioRef.current = progress;
+
+    // Calculate active step without re-rendering component on every frame
+    const currentStep = PROCESS_STEPS.find(
+      (step) => progress >= step.range[0] && (progress < step.range[1] || step.id === 5)
+    ) || PROCESS_STEPS[0];
+
+    if (currentStep.id !== activeStepId) {
+      setActiveStepId(currentStep.id);
+    }
+
+    const nextApproved = progress >= 0.82 || currentStep.id === 5;
+    if (nextApproved !== isLoanApproved) {
+      setIsLoanApproved(nextApproved);
+    }
 
     const video = videoRef.current;
     if (video && video.duration) {
-      const targetTime = progress * video.duration;
-      if (Math.abs(lastTargetTimeRef.current - targetTime) > 0.01) {
-        lastTargetTimeRef.current = targetTime;
-        video.currentTime = targetTime;
-      }
+      targetTimeRef.current = progress * video.duration;
     }
   };
 
-  // Continuously draw canvas in sync with video seeking
+  // Apply video currentTime seeking only when browser is ready (non-blocking)
+  const applySeek = () => {
+    const video = videoRef.current;
+    if (!video || !video.duration) return;
+
+    // Do NOT interrupt an ongoing browser seek operation
+    if (video.seeking || isSeekingRef.current) return;
+
+    const targetTime = targetTimeRef.current;
+    // Apply 33ms threshold (~1 frame at 30fps) to eliminate microscopic seeking stutter
+    if (Math.abs(targetTime - lastTimeRef.current) >= 0.033) {
+      lastTimeRef.current = targetTime;
+      isSeekingRef.current = true;
+      video.currentTime = targetTime;
+    }
+  };
+
+  // rAF rendering loop
   useEffect(() => {
     let active = true;
 
     const renderLoop = () => {
       if (!active) return;
-      updateScrollProgress();
+      calculateScroll();
+      applySeek();
       drawVideoFrame();
       rafIdRef.current = requestAnimationFrame(renderLoop);
     };
@@ -175,11 +206,11 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
         cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, []);
+  }, [activeStepId, isLoanApproved]);
 
   useEffect(() => {
     const handleScroll = () => {
-      updateScrollProgress();
+      calculateScroll();
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
@@ -189,13 +220,8 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
   }, []);
 
   useLenis(() => {
-    updateScrollProgress();
+    calculateScroll();
   });
-
-  // Active step in process
-  const activeStep = PROCESS_STEPS.find(
-    (step) => scrollRatio >= step.range[0] && (scrollRatio < step.range[1] || step.id === 5)
-  ) || PROCESS_STEPS[0];
 
   return (
     <section
@@ -219,7 +245,9 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
           drawVideoFrame();
         }}
         onSeeked={() => {
+          isSeekingRef.current = false;
           drawVideoFrame();
+          applySeek(); // Process next pending seek target immediately
         }}
       />
 
@@ -252,8 +280,8 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
             <div className="flex items-center justify-between gap-1 pt-0.5 overflow-x-auto no-scrollbar">
               {PROCESS_STEPS.map((step, idx) => {
                 const Icon = step.icon;
-                const isActive = step.id === activeStep.id;
-                const isPassed = scrollRatio >= step.range[1];
+                const isActive = step.id === activeStepId;
+                const isPassed = step.id < activeStepId;
 
                 return (
                   <React.Fragment key={step.id}>
@@ -287,7 +315,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
             </div>
 
             {/* Loan Approved Banner at last frame lock */}
-            {(scrollRatio >= 0.82 || activeStep.id === 5) && (
+            {isLoanApproved && (
               <div className="flex items-center justify-center gap-1.5 sm:gap-2 mt-0.5 py-1.5 sm:py-2 px-3 bg-emerald-500 text-white font-black text-[11px] sm:text-xs uppercase tracking-widest rounded-xl shadow-lg shadow-emerald-500/30 animate-pulse border border-emerald-400">
                 <CheckCircle2 className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white" />
                 <span>LOAN APPROVED</span>
@@ -301,4 +329,5 @@ export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
 };
 
 export default ScrollHero;
+
 
