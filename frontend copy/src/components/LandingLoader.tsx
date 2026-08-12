@@ -1,19 +1,32 @@
 import { useEffect, useState } from 'react';
 
-export function LandingLoader() {
+interface LandingLoaderProps {
+  isLoading?: boolean;
+}
+
+export function LandingLoader({ isLoading = false }: LandingLoaderProps) {
   const [visible, setVisible] = useState(true);
   const [fading, setFading] = useState(false);
 
   useEffect(() => {
-    // Start fade-out after 1.2s
-    const fadeTimer = setTimeout(() => setFading(true), 1200);
-    // Unmount after fade completes
-    const removeTimer = setTimeout(() => setVisible(false), 1700);
+    // If hero assets are still loading, keep loader up until ready (or safety 4s cap)
+    if (isLoading) {
+      const safetyTimer = setTimeout(() => {
+        setFading(true);
+        setTimeout(() => setVisible(false), 500);
+      }, 4000);
+      return () => clearTimeout(safetyTimer);
+    }
+
+    // Graceful fade out once hero assets are loaded (min 600ms display)
+    const fadeTimer = setTimeout(() => setFading(true), 600);
+    const removeTimer = setTimeout(() => setVisible(false), 1100);
+
     return () => {
       clearTimeout(fadeTimer);
       clearTimeout(removeTimer);
     };
-  }, []);
+  }, [isLoading]);
 
   if (!visible) return null;
 
@@ -131,3 +144,4 @@ export function LandingLoader() {
     </div>
   );
 }
+

@@ -24,8 +24,7 @@ function AppContent() {
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [inPortfolio, setInPortfolio] = useState(false);
-
-
+  const [heroLoaded, setHeroLoaded] = useState(false);
 
   // Optimistic init: if a token exists, assume dashboard until auth proves otherwise.
   // This prevents the single-frame flash of landing page on reload when already logged in.
@@ -144,11 +143,15 @@ function AppContent() {
         {/* VIEW 1: LANDING PAGE */}
         {currentView === 'landing' ? (
           <>
-            {/* Brief branded loader on first mount */}
-            <LandingLoader />
+            {/* Branded loader stays visible until landing hero is ready */}
+            <LandingLoader isLoading={!heroLoaded} />
 
             {/* TOP HERO */}
-            <ScrollHero onOpenSignup={handleOpenSignup} onOpenLogin={handleOpenLogin} />
+            <ScrollHero
+              onLoaded={() => setHeroLoaded(true)}
+              onOpenSignup={handleOpenSignup}
+              onOpenLogin={handleOpenLogin}
+            />
 
             {/* 3D PERSPECTIVE CONTAINER SCROLL */}
             <ScoreEngineContainerScroll onOpenSignup={handleOpenSignup} onOpenLogin={handleOpenLogin} />

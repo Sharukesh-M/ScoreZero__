@@ -5,6 +5,7 @@ import { Sparkles, Upload, FileCode, Award, CheckCircle2, ChevronRight } from 'l
 export interface ScrollHeroProps {
   onOpenSignup?: () => void;
   onOpenLogin?: () => void;
+  onLoaded?: () => void;
 }
 
 const PROCESS_STEPS = [
@@ -15,7 +16,7 @@ const PROCESS_STEPS = [
   { id: 5, label: 'Loan Approval', icon: CheckCircle2, range: [0.80, 1.0] },
 ];
 
-export const ScrollHero: React.FC<ScrollHeroProps> = () => {
+export const ScrollHero: React.FC<ScrollHeroProps> = ({ onLoaded }) => {
   const sectionRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -26,6 +27,11 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
   const rafIdRef = useRef<number | null>(null);
   const prefersReducedMotionRef = useRef<boolean>(false);
   const lastTargetTimeRef = useRef<number>(-1);
+
+  const markLoaded = () => {
+    setIsLoaded(true);
+    onLoaded?.();
+  };
 
   // High-precision subpixel-aligned video frame drawing on canvas
   const drawVideoFrame = () => {
@@ -98,7 +104,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
     const video = videoRef.current;
     if (video) {
       if (video.readyState >= 2) {
-        setIsLoaded(true);
+        markLoaded();
         drawVideoFrame();
       }
     }
@@ -205,11 +211,11 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
         muted
         className="hidden"
         onLoadedData={() => {
-          setIsLoaded(true);
+          markLoaded();
           drawVideoFrame();
         }}
         onCanPlay={() => {
-          setIsLoaded(true);
+          markLoaded();
           drawVideoFrame();
         }}
         onSeeked={() => {
