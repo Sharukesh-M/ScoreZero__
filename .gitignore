@@ -24,6 +24,7 @@ Thumbs.db
 
 # Heavy assets / frames
 frontend copy/public/frames/
+public/frames/
 
 # PDF generation scripts & outputs (do not push)
 generate_pdf.py

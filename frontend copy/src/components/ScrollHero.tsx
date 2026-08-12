@@ -2,8 +2,6 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useLenis } from 'lenis/react';
 import { Sparkles, Upload, FileCode, Award, CheckCircle2, ChevronRight } from 'lucide-react';
 
-const TOTAL_FRAMES = 600;
-
 export interface ScrollHeroProps {
   onOpenSignup?: () => void;
   onOpenLogin?: () => void;
@@ -20,26 +18,22 @@ const PROCESS_STEPS = [
 export const ScrollHero: React.FC<ScrollHeroProps> = () => {
   const sectionRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
 
-  const [isLoaded, setIsLoaded] = useState(true);
+  const [isLoaded, setIsLoaded] = useState(false);
   const [scrollRatio, setScrollRatio] = useState(0);
 
-  const framesRef = useRef<HTMLImageElement[]>([]);
-  const currentFrameIndexRef = useRef<number>(0);
-  const lastDrawnIndexRef = useRef<number>(-1);
-  const needsRenderRef = useRef<boolean>(false);
   const rafIdRef = useRef<number | null>(null);
   const prefersReducedMotionRef = useRef<boolean>(false);
+  const lastTargetTimeRef = useRef<number>(-1);
 
-  // High-precision subpixel-aligned canvas drawing
-  const drawFrame = (index: number) => {
+  // High-precision subpixel-aligned video frame drawing on canvas
+  const drawVideoFrame = () => {
     const canvas = canvasRef.current;
-    if (!canvas) return;
+    const video = videoRef.current;
+    if (!canvas || !video || video.readyState < 2) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
-    const img = framesRef.current[index];
-    if (!img || !img.complete || img.naturalWidth === 0) return;
 
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
@@ -63,8 +57,9 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
 
-    // Aspect ratio cover math in 1:1 logical pixels
-    const imgAspect = img.naturalWidth / img.naturalHeight;
+    const videoW = video.videoWidth || 1920;
+    const videoH = video.videoHeight || 1080;
+    const videoAspect = videoW / videoH;
     const canvasAspect = displayW / displayH;
 
     let drawWidth = displayW;
@@ -72,82 +67,40 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
     let offsetX = 0;
     let offsetY = 0;
 
-    if (canvasAspect > imgAspect) {
-      drawHeight = displayW / imgAspect;
+    if (canvasAspect > videoAspect) {
+      drawHeight = displayW / videoAspect;
       offsetY = (displayH - drawHeight) / 2;
     } else {
-      drawWidth = displayH * imgAspect;
+      drawWidth = displayH * videoAspect;
       offsetX = (displayW - drawWidth) / 2;
     }
 
     ctx.clearRect(0, 0, displayW, displayH);
-    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight);
+    try {
+      ctx.drawImage(video, offsetX, offsetY, drawWidth, drawHeight);
+    } catch {
+      // Ignore transient draw errors while video seeks
+    }
     ctx.restore();
-
-    lastDrawnIndexRef.current = index;
   };
 
-  // Preload frames
+  // Preload video & motion preferences
   useEffect(() => {
     const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
     prefersReducedMotionRef.current = motionQuery.matches;
 
     const handleMotionChange = (e: MediaQueryListEvent) => {
       prefersReducedMotionRef.current = e.matches;
-      if (e.matches) {
-        currentFrameIndexRef.current = 299;
-        drawFrame(299);
-      }
+      drawVideoFrame();
     };
     motionQuery.addEventListener('change', handleMotionChange);
 
-    let loadedCount = 0;
-    const loadedImages: HTMLImageElement[] = new Array(TOTAL_FRAMES);
-
-    const onSingleImageLoad = () => {
-      loadedCount++;
-
-      if (loadedCount === TOTAL_FRAMES) {
-        framesRef.current = loadedImages;
+    const video = videoRef.current;
+    if (video) {
+      if (video.readyState >= 2) {
         setIsLoaded(true);
+        drawVideoFrame();
       }
-    };
-
-    for (let i = 1; i <= TOTAL_FRAMES; i++) {
-      const img = new Image();
-      const padded5 = String(i).padStart(5, '0');
-      const padded4 = String(i).padStart(4, '0');
-      const padded3 = String(i).padStart(3, '0');
-
-      const primarySrc = `/frames/frame_${padded5}.png`;
-      const fallbackSrc1 = `/frames/frame_${padded5}.webp`;
-      const fallbackSrc2 = `/frames/frame_${padded4}.png`;
-      const fallbackSrc3 = `/frames/frame_${padded4}.webp`;
-      const fallbackSrc4 = `/Frames/frame_${padded4}.webp`;
-      const fallbackSrc5 = `/frames/ezgif-frame-${padded3}.webp`;
-
-      img.onload = () => {
-        onSingleImageLoad();
-      };
-
-      img.onerror = () => {
-        if (img.src.includes(`/frames/frame_${padded5}.png`)) {
-          img.src = fallbackSrc1;
-        } else if (img.src.includes(`/frames/frame_${padded5}.webp`)) {
-          img.src = fallbackSrc2;
-        } else if (img.src.includes(`/frames/frame_${padded4}.png`)) {
-          img.src = fallbackSrc3;
-        } else if (img.src.includes(`/frames/frame_${padded4}.webp`)) {
-          img.src = fallbackSrc4;
-        } else if (img.src.includes('/Frames/frame_')) {
-          img.src = fallbackSrc5;
-        } else {
-          onSingleImageLoad();
-        }
-      };
-
-      img.src = primarySrc;
-      loadedImages[i - 1] = img;
     }
 
     return () => {
@@ -158,8 +111,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
   // Update canvas sizing matching DPR for sharp crispness
   useEffect(() => {
     const updateCanvasSize = () => {
-      const frameToDraw = prefersReducedMotionRef.current ? 299 : currentFrameIndexRef.current;
-      drawFrame(frameToDraw);
+      drawVideoFrame();
     };
 
     updateCanvasSize();
@@ -170,7 +122,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
     };
   }, [isLoaded]);
 
-  // Calculate scroll progress
+  // Calculate scroll progress and sync video currentTime
   const updateScrollProgress = () => {
     if (prefersReducedMotionRef.current) return;
     const section = sectionRef.current;
@@ -188,32 +140,24 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
     const progress = Math.min(Math.max(scrollTop / maxScroll, 0), 1);
     setScrollRatio(progress);
 
-    const frameIndex = Math.min(Math.max(Math.floor(progress * (TOTAL_FRAMES - 1)), 0), TOTAL_FRAMES - 1);
-
-    if (frameIndex !== currentFrameIndexRef.current) {
-      currentFrameIndexRef.current = frameIndex;
-      needsRenderRef.current = true;
+    const video = videoRef.current;
+    if (video && video.duration) {
+      const targetTime = progress * video.duration;
+      if (Math.abs(lastTargetTimeRef.current - targetTime) > 0.01) {
+        lastTargetTimeRef.current = targetTime;
+        video.currentTime = targetTime;
+      }
     }
   };
 
-  // rAF loop
+  // Continuously draw canvas in sync with video seeking
   useEffect(() => {
     let active = true;
 
     const renderLoop = () => {
       if (!active) return;
-
-      if (isLoaded) {
-        updateScrollProgress();
-
-        if (needsRenderRef.current || currentFrameIndexRef.current !== lastDrawnIndexRef.current) {
-          if (!prefersReducedMotionRef.current) {
-            drawFrame(currentFrameIndexRef.current);
-          }
-          needsRenderRef.current = false;
-        }
-      }
-
+      updateScrollProgress();
+      drawVideoFrame();
       rafIdRef.current = requestAnimationFrame(renderLoop);
     };
 
@@ -225,16 +169,7 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
         cancelAnimationFrame(rafIdRef.current);
       }
     };
-  }, [isLoaded]);
-
-  useEffect(() => {
-    if (isLoaded) {
-      const initialIndex = prefersReducedMotionRef.current ? 299 : 0;
-      currentFrameIndexRef.current = initialIndex;
-      drawFrame(initialIndex);
-      updateScrollProgress();
-    }
-  }, [isLoaded]);
+  }, []);
 
   useEffect(() => {
     const handleScroll = () => {
@@ -261,6 +196,27 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
       ref={sectionRef}
       className="relative h-[300vh] w-full bg-[#08101C] text-white touch-pan-y"
     >
+      {/* Hidden Video Source element */}
+      <video
+        ref={videoRef}
+        src="/hero-animation.mp4"
+        preload="auto"
+        playsInline
+        muted
+        className="hidden"
+        onLoadedData={() => {
+          setIsLoaded(true);
+          drawVideoFrame();
+        }}
+        onCanPlay={() => {
+          setIsLoaded(true);
+          drawVideoFrame();
+        }}
+        onSeeked={() => {
+          drawVideoFrame();
+        }}
+      />
+
       {/* Sticky Viewport Container */}
       <div className="sticky top-0 h-screen w-full overflow-hidden">
         {/* Canvas Element */}
@@ -339,3 +295,4 @@ export const ScrollHero: React.FC<ScrollHeroProps> = () => {
 };
 
 export default ScrollHero;
+
