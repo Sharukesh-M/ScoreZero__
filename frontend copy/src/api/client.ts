@@ -35,7 +35,7 @@ api.interceptors.response.use(
     if (error.request) {
       return Promise.reject(
         new Error(
-          'Unable to reach ScoreZero Flask server at http://localhost:5000. Please check if backend is running.'
+          'Unable to reach ScoreZero backend server. Please check your network connection or verify if backend is live.'
         )
       );
     }
